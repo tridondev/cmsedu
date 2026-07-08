@@ -1,0 +1,3 @@
+git add .
+git commit -m "functionality of code"          
+git push origin main

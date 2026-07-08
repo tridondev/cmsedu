@@ -1,4 +1,9 @@
-import { Routes, Route, NavLink } from "react-router-dom";
+import { Routes, Route } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { doc, getDoc } from "firebase/firestore";
+import { db } from "../../firebase/config";
+import { useAuth } from "../../context/AuthContext";
+import AppShell from "../../components/AppShell";
 import Classes from "./Classes";
 import Students from "./Students";
 import Teachers from "./Teachers";
@@ -15,20 +20,17 @@ const TABS = [
 ];
 
 export default function SchoolAdminApp({ schoolId }) {
+  const { logout } = useAuth();
+  const [schoolName, setSchoolName] = useState("");
+
+  useEffect(() => {
+    getDoc(doc(db, "schools", schoolId)).then((snap) => {
+      if (snap.exists()) setSchoolName(snap.data().name || "");
+    });
+  }, [schoolId]);
+
   return (
-    <div className="p-6">
-      <nav className="flex gap-4 mb-6 text-sm">
-        {TABS.map((tab) => (
-          <NavLink
-            key={tab.to}
-            to={tab.to}
-            end={tab.end}
-            className={({ isActive }) => (isActive ? "font-semibold text-slate-900" : "text-slate-500")}
-          >
-            {tab.label}
-          </NavLink>
-        ))}
-      </nav>
+    <AppShell eyebrow="School Admin" title={schoolName || "Loading…"} subtitle="CMSEDU" navItems={TABS} onLogout={logout}>
       <Routes>
         <Route index element={<Overview schoolId={schoolId} />} />
         <Route path="classes" element={<Classes schoolId={schoolId} />} />
@@ -37,19 +39,34 @@ export default function SchoolAdminApp({ schoolId }) {
         <Route path="results" element={<Results schoolId={schoolId} />} />
         <Route path="settings" element={<Settings schoolId={schoolId} />} />
       </Routes>
-    </div>
+    </AppShell>
   );
 }
 
 function Overview() {
+  const steps = [
+    { title: "Classes", body: "Set up your class list and subjects." },
+    { title: "Students", body: "Add your student roster to each class." },
+    { title: "Teachers", body: "Invite staff and assign them to subjects." },
+    { title: "Results & Export", body: "Review positions and download report cards." },
+  ];
   return (
     <div className="max-w-2xl">
-      <h2 className="text-xl font-semibold mb-2">Welcome</h2>
-      <p className="text-slate-500 text-sm">
-        Start in <b>Classes</b> to set up your class list and subjects, then <b>Students</b> to add your
-        roster, then <b>Teachers</b> to invite staff and assign them to subjects. Once scores are entered,
-        use <b>Results & Export</b> to review positions and download the report card workbook.
-      </p>
+      <h2 className="page-title">Welcome 👋</h2>
+      <p className="page-subtitle mb-6">Here's the recommended order to get your school set up.</p>
+      <div className="flex flex-col gap-3">
+        {steps.map((s, i) => (
+          <div key={s.title} className="card-pad flex items-start gap-4">
+            <span className="h-8 w-8 shrink-0 rounded-full bg-brand-50 text-brand-700 font-bold flex items-center justify-center text-sm">
+              {i + 1}
+            </span>
+            <div>
+              <p className="font-semibold text-slate-900 text-sm">{s.title}</p>
+              <p className="text-sm text-slate-500 mt-0.5">{s.body}</p>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

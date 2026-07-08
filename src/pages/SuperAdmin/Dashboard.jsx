@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { addDoc, collection, doc, onSnapshot, orderBy, query, setDoc } from "firebase/firestore";
 import { db, auth } from "../../firebase/config";
+import { useAuth } from "../../context/AuthContext";
+import AppShell from "../../components/AppShell";
 
 function randomAccessCode(prefix) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -22,7 +24,18 @@ async function callAdminAction(action, schoolId) {
   return data;
 }
 
+const TABS = [{ to: "", label: "Schools", end: true }];
+
 export default function SuperAdminDashboard() {
+  const { logout } = useAuth();
+  return (
+    <AppShell eyebrow="Super Admin" title="CMSEDU Platform" subtitle="Onboard & manage schools" navItems={TABS} onLogout={logout}>
+      <DashboardBody />
+    </AppShell>
+  );
+}
+
+function DashboardBody() {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [gradingScale, setGradingScale] = useState("JSS");
@@ -69,55 +82,61 @@ export default function SuperAdminDashboard() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto mt-16 flex flex-col gap-10">
+    <div className="flex flex-col gap-10">
       <div>
-        <h2 className="text-xl font-semibold mb-4">Onboard a new school</h2>
-        <form onSubmit={createSchool} className="flex flex-col gap-3 max-w-lg">
-          <input
-            className="border p-2 rounded"
-            placeholder="School name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          <input
-            className="border p-2 rounded"
-            placeholder="Slug (e.g. gaskiya)"
-            value={slug}
-            onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-            required
-          />
-          <select className="border p-2 rounded" value={gradingScale} onChange={(e) => setGradingScale(e.target.value)}>
-            <option value="JSS">Junior Secondary (JSS)</option>
-            <option value="SS">Senior Secondary (SS)</option>
-          </select>
-          {error && <p className="text-red-600 text-sm">{error}</p>}
-          <button className="bg-slate-900 text-white p-2 rounded disabled:opacity-50" disabled={creating}>
+        <h2 className="page-title">Onboard a new school</h2>
+        <p className="page-subtitle mb-4">Creates the school record and a one-time activation code.</p>
+        <form onSubmit={createSchool} className="card-pad flex flex-col gap-4 max-w-lg">
+          <div>
+            <label className="field-label">School name</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} required />
+          </div>
+          <div>
+            <label className="field-label">Slug</label>
+            <input
+              className="input"
+              placeholder="e.g. gaskiya"
+              value={slug}
+              onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
+              required
+            />
+            <p className="text-xs text-slate-400 mt-1">Login URL will be /educms/{slug || "<slug>"}</p>
+          </div>
+          <div>
+            <label className="field-label">Grading scale</label>
+            <select className="input" value={gradingScale} onChange={(e) => setGradingScale(e.target.value)}>
+              <option value="JSS">Junior Secondary (JSS)</option>
+              <option value="SS">Senior Secondary (SS)</option>
+            </select>
+          </div>
+          {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+          <button className="btn-primary self-start px-6" disabled={creating}>
             {creating ? "Creating…" : "Create school"}
           </button>
         </form>
         {created && (
-          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded max-w-lg">
-            <p>
+          <div className="mt-4 card-pad max-w-lg bg-emerald-50 border-emerald-200">
+            <p className="text-sm text-emerald-900">
               School created. Access route: <b>/educms/{created.slug}</b>
             </p>
-            <p>
+            <p className="text-sm text-emerald-900 mt-1">
               Access code (give this to the school admin): <b>{created.accessCode}</b>
             </p>
-            <p className="text-xs text-slate-500 mt-1">
-              They'll use "First time? Activate access" on that login page to set up their own password.
+            <p className="text-xs text-emerald-700 mt-2">
+              They'll use "First time" on that login page to set up their own password.
             </p>
           </div>
         )}
       </div>
 
       <div>
-        <h2 className="text-xl font-semibold mb-4">Schools</h2>
-        <div className="flex flex-col gap-2">
+        <h2 className="page-title">Schools ({schools.length})</h2>
+        <p className="page-subtitle mb-4">Manage activation status and access codes.</p>
+        <div className="flex flex-col gap-3">
           {schools.map((s) => (
             <SchoolRow key={s.id} school={s} />
           ))}
-          {schools.length === 0 && <p className="text-slate-400 text-sm">No schools yet.</p>}
+          {schools.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No schools yet.</div>}
         </div>
       </div>
     </div>
@@ -143,32 +162,28 @@ function SchoolRow({ school }) {
   };
 
   return (
-    <div className="border rounded p-3 flex flex-col gap-1 text-sm">
-      <div className="flex items-center justify-between">
+    <div className="row-card">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <span className="font-medium">{school.name}</span>{" "}
-          <span className="text-slate-400">/educms/{school.slug}</span>
+          <p className="font-semibold text-slate-900 text-sm">{school.name}</p>
+          <p className="text-slate-400 text-xs mt-0.5">/educms/{school.slug}</p>
         </div>
-        <span
-          className={`text-xs px-2 py-0.5 rounded-full ${
-            school.adminClaimed ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"
-          }`}
-        >
+        <span className={school.adminClaimed ? "badge-green" : "badge-amber"}>
           {school.adminClaimed ? "Admin activated" : "Pending activation"}
         </span>
       </div>
 
-      {!school.adminClaimed && <p className="text-slate-500">Access code: {revealCode || school.accessCode}</p>}
-      {error && <p className="text-red-600">{error}</p>}
+      {!school.adminClaimed && <p className="text-slate-500 text-sm mt-2">Access code: {revealCode || school.accessCode}</p>}
+      {error && <p className="text-red-600 text-sm mt-1">{error}</p>}
 
-      <div className="flex gap-3 mt-1">
+      <div className="flex gap-2 mt-2">
         {!school.adminClaimed && (
-          <button className="text-blue-600 disabled:opacity-50" disabled={busy} onClick={() => run("regenerateCode")}>
+          <button className="btn-sm btn-secondary" disabled={busy} onClick={() => run("regenerateCode")}>
             Regenerate code
           </button>
         )}
         {school.adminClaimed && (
-          <button className="text-red-600 disabled:opacity-50" disabled={busy} onClick={() => run("revokeAdmin")}>
+          <button className="btn-sm btn-danger" disabled={busy} onClick={() => run("revokeAdmin")}>
             Revoke admin access
           </button>
         )}

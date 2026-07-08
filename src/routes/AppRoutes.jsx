@@ -26,22 +26,53 @@ function TenantGate({ children }) {
     return () => (active = false);
   }, [schoolSlug]);
 
-  if (state.loading) return <div className="p-8 text-center">Loading school…</div>;
-  if (state.error) return <div className="p-8 text-center">No school found at /educms/{schoolSlug}</div>;
+  if (state.loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3 text-slate-500">
+          <div className="h-8 w-8 rounded-full border-2 border-brand-200 border-t-brand-600 animate-spin" />
+          <p className="text-sm">Loading school…</p>
+        </div>
+      </div>
+    );
+  }
+  if (state.error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+        <div className="card-pad max-w-sm w-full text-center">
+          <h2 className="text-lg font-bold text-slate-900 mb-1">School not found</h2>
+          <p className="text-sm text-slate-500">
+            No school is registered at <span className="font-mono text-slate-700">/educms/{schoolSlug}</span>.
+            Double-check the link your school administrator gave you.
+          </p>
+        </div>
+      </div>
+    );
+  }
   return children(state.schoolId);
 }
 
 function RequireRole({ role, schoolId, children }) {
+  const { schoolSlug } = useParams();
   const { user, claims, loading } = useAuth();
-  if (loading) return <div className="p-8 text-center">Checking access…</div>;
-  if (!user || !claims) return <Navigate to=".." replace />;
-  if (claims.schoolId !== schoolId || claims.role !== role) return <Navigate to=".." replace />;
+  if (loading) return <div className="p-8 text-center text-slate-500">Checking access…</div>;
+  if (!user || !claims) return <Navigate to={`/educms/${schoolSlug}`} replace />;
+  if (claims.schoolId !== schoolId || claims.role !== role) return <Navigate to={`/educms/${schoolSlug}`} replace />;
   return children;
 }
 
 function RequirePlatformAdmin({ children }) {
   const { user, claims, loading } = useAuth();
-  if (loading) return <div className="p-8 text-center">Checking access…</div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3 text-slate-500">
+          <div className="h-8 w-8 rounded-full border-2 border-brand-200 border-t-brand-600 animate-spin" />
+          <p className="text-sm">Checking access…</p>
+        </div>
+      </div>
+    );
+  }
   if (!user || !claims?.platformAdmin) return <Navigate to="/educms/admin" replace />;
   return children;
 }

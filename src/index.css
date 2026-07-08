@@ -1,3 +1,134 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply font-sans text-slate-800 bg-slate-50;
+  }
+  h1, h2, h3, h4 {
+    @apply font-display text-slate-900;
+  }
+  input, select, textarea, button {
+    font-size: 16px;
+  }
+  ::selection {
+    @apply bg-brand-200;
+  }
+}
+
+@layer components {
+  /* ---------- Buttons ---------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold
+           transition active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none select-none;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white shadow-soft hover:bg-brand-700;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-slate-700 border border-slate-200 shadow-soft hover:bg-slate-50;
+  }
+  .btn-danger {
+    @apply btn bg-red-50 text-red-600 border border-red-100 hover:bg-red-100;
+  }
+  .btn-ghost {
+    @apply btn text-slate-600 hover:bg-slate-100;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .btn-icon {
+    @apply inline-flex items-center justify-center rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition;
+  }
+
+  /* ---------- Form fields ---------- */
+  .field-label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5;
+  }
+  .input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800
+           placeholder:text-slate-400 shadow-soft transition
+           focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500;
+  }
+  select.input {
+    @apply pr-8;
+  }
+  .textarea {
+    @apply input font-mono;
+  }
+
+  /* ---------- Cards & surfaces ---------- */
+  .card {
+    @apply bg-white rounded-2xl border border-slate-200/80 shadow-card;
+  }
+  .card-pad {
+    @apply card p-4 sm:p-6;
+  }
+
+  /* ---------- Badges ---------- */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold;
+  }
+  .badge-green {
+    @apply badge bg-emerald-50 text-emerald-700;
+  }
+  .badge-amber {
+    @apply badge bg-amber-50 text-amber-700;
+  }
+  .badge-slate {
+    @apply badge bg-slate-100 text-slate-600;
+  }
+  .badge-brand {
+    @apply badge bg-brand-50 text-brand-700;
+  }
+
+  /* ---------- Responsive data table ---------- */
+  .table-wrap {
+    @apply card overflow-x-auto;
+  }
+  .table-modern {
+    @apply w-full text-sm border-collapse min-w-[640px];
+  }
+  .table-modern thead th {
+    @apply sticky top-0 bg-slate-50/95 backdrop-blur text-left text-xs font-semibold uppercase tracking-wide
+           text-slate-500 px-3 py-3 border-b border-slate-200;
+  }
+  .table-modern tbody td {
+    @apply px-3 py-3 border-b border-slate-100 text-slate-700;
+  }
+  .table-modern tbody tr {
+    @apply transition hover:bg-brand-50/40;
+  }
+
+  .row-card {
+    @apply card p-3.5 flex flex-col gap-1;
+  }
+
+  .page-title {
+    @apply text-lg sm:text-xl font-bold text-slate-900;
+  }
+  .page-subtitle {
+    @apply text-sm text-slate-500 mt-0.5;
+  }
+
+  .chip {
+    @apply text-xs px-2.5 py-1 rounded-full border border-slate-200 cursor-pointer select-none transition;
+  }
+  .chip-active {
+    @apply bg-brand-600 text-white border-brand-600;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

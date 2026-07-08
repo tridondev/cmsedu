@@ -435,15 +435,45 @@ export async function exportClassResults(school, classInfo, students, options = 
   for (let i = 1; i <= colCount; i++) sheet.getColumn(i).width = 11;
   sheet.getColumn(1).width = 22;
 
+  // --- Print / page setup: one student block per A4 page ---------------
+  // fitToWidth:1 scales each page's columns to fit a single A4 sheet width;
+  // fitToHeight:0 leaves height unconstrained (each block is a fixed 60-row
+  // height, so it naturally fills close to one page). Manual row breaks
+  // after every block guarantee the next student always starts on a fresh
+  // page, regardless of Excel's automatic pagination.
+  sheet.pageSetup = {
+    paperSize: 9, // A4
+    orientation: isThirdTerm ? "landscape" : "portrait",
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: 0,
+    horizontalCentered: true,
+    margins: {
+      left: 0.35,
+      right: 0.35,
+      top: 0.4,
+      bottom: 0.4,
+      header: 0.2,
+      footer: 0.2,
+    },
+    printArea: `A1:${sheet.getColumn(colCount).letter}${BLOCK_HEIGHT * students.length}`,
+  };
+
   let top = 1;
-  for (const student of students) {
+  students.forEach((student, i) => {
     if (isThirdTerm) {
       writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id]);
     } else {
       writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores);
     }
+    const isLastStudent = i === students.length - 1;
+    if (!isLastStudent) {
+      // Force a page break after this student's block so the next one
+      // always starts at the top of a new A4 page when printed/exported.
+      sheet.getRow(top + BLOCK_HEIGHT - 1).addPageBreak();
+    }
     top += BLOCK_HEIGHT;
-  }
+  });
 
   return wb.xlsx.writeBuffer();
 }

@@ -184,74 +184,124 @@ export default function Results({ schoolId }) {
   };
 
   return (
-    <div className="flex flex-col gap-6 max-w-4xl">
-      <div className="flex gap-3">
-        <select className="border p-2 rounded" value={classId} onChange={(e) => setClassId(e.target.value)}>
-          {classes.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <select className="border p-2 rounded" value={term} onChange={(e) => setTerm(e.target.value)}>
-          {TERMS.map((t) => (
-            <option key={t} value={t}>
-              {t} Term
-            </option>
-          ))}
-        </select>
-        <button className="border px-3 rounded disabled:opacity-50" disabled={busy || !classId} onClick={recompute}>
-          Recompute positions
-        </button>
-        <button className="bg-slate-900 text-white px-4 rounded disabled:opacity-50" disabled={busy || !classId || students.length === 0} onClick={doExport}>
-          {busy ? "Working…" : "Export to Excel"}
-        </button>
+    <div className="flex flex-col gap-6">
+      <div>
+        <h2 className="page-title">Results & Export</h2>
+        <p className="page-subtitle">
+          Each student's full report card exports to its own print-ready A4 page in the workbook.
+        </p>
       </div>
 
-      {error && <p className="text-red-600 text-sm">{error}</p>}
+      <div className="card-pad flex flex-col sm:flex-row sm:items-end gap-3">
+        <div className="flex-1">
+          <label className="field-label">Class</label>
+          <select className="input" value={classId} onChange={(e) => setClassId(e.target.value)}>
+            {classes.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex-1">
+          <label className="field-label">Term</label>
+          <select className="input" value={term} onChange={(e) => setTerm(e.target.value)}>
+            {TERMS.map((t) => (
+              <option key={t} value={t}>
+                {t} Term
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" disabled={busy || !classId} onClick={recompute}>
+            Recompute positions
+          </button>
+          <button className="btn-primary" disabled={busy || !classId || students.length === 0} onClick={doExport}>
+            {busy ? "Working…" : "Export to Excel"}
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
       {!classId && <p className="text-slate-400 text-sm">Create a class first.</p>}
 
       {classId && (
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="border-b text-left">
-              <th className="p-2">Student</th>
-              {subjects.map((s) => (
-                <th key={s.id} className="p-2 text-center">
-                  {s.name}
-                </th>
-              ))}
-              <th className="p-2 text-center">Total</th>
-              <th className="p-2 text-center">Average</th>
-              <th className="p-2 text-center">Position</th>
-            </tr>
-          </thead>
-          <tbody>
+        <>
+          {/* Desktop / tablet table */}
+          <div className="hidden sm:block table-wrap">
+            <table className="table-modern">
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  {subjects.map((s) => (
+                    <th key={s.id} className="text-center">
+                      {s.name}
+                    </th>
+                  ))}
+                  <th className="text-center">Total</th>
+                  <th className="text-center">Average</th>
+                  <th className="text-center">Position</th>
+                </tr>
+              </thead>
+              <tbody>
+                {students.map((s) => {
+                  const pos = positions[s.id] || {};
+                  return (
+                    <tr key={s.id}>
+                      <td className="font-medium text-slate-800">{s.fullName}</td>
+                      {subjects.map((subj) => (
+                        <td key={subj.id} className="text-center">
+                          {scoresByStudent[s.id]?.[subj.id]?.total ?? "-"}
+                        </td>
+                      ))}
+                      <td className="text-center font-semibold text-slate-900">{pos.overallTotal ?? "-"}</td>
+                      <td className="text-center">{pos.overallAverage ?? "-"}</td>
+                      <td className="text-center">
+                        <span className="badge-brand">{pos.overallPosition ?? "-"}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {students.length === 0 && (
+                  <tr>
+                    <td className="p-6 text-center text-slate-400" colSpan={subjects.length + 4}>
+                      No students in this class.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile cards */}
+          <div className="sm:hidden flex flex-col gap-3">
             {students.map((s) => {
               const pos = positions[s.id] || {};
               return (
-                <tr key={s.id} className="border-b">
-                  <td className="p-2">{s.fullName}</td>
-                  {subjects.map((subj) => (
-                    <td key={subj.id} className="p-2 text-center">
-                      {scoresByStudent[s.id]?.[subj.id]?.total ?? "-"}
-                    </td>
-                  ))}
-                  <td className="p-2 text-center font-medium">{pos.overallTotal ?? "-"}</td>
-                  <td className="p-2 text-center">{pos.overallAverage ?? "-"}</td>
-                  <td className="p-2 text-center">{pos.overallPosition ?? "-"}</td>
-                </tr>
+                <div key={s.id} className="row-card">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-slate-900 text-sm">{s.fullName}</p>
+                    <span className="badge-brand">Pos. {pos.overallPosition ?? "-"}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-xs text-slate-500">
+                    {subjects.map((subj) => (
+                      <div key={subj.id} className="flex justify-between">
+                        <span>{subj.name}</span>
+                        <span className="font-medium text-slate-700">{scoresByStudent[s.id]?.[subj.id]?.total ?? "-"}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex justify-between mt-2 pt-2 border-t border-slate-100 text-xs">
+                    <span className="text-slate-500">Total: <b className="text-slate-800">{pos.overallTotal ?? "-"}</b></span>
+                    <span className="text-slate-500">Average: <b className="text-slate-800">{pos.overallAverage ?? "-"}</b></span>
+                  </div>
+                </div>
               );
             })}
-            {students.length === 0 && (
-              <tr>
-                <td className="p-4 text-slate-400" colSpan={subjects.length + 4}>
-                  No students in this class.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+            {students.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class.</div>}
+          </div>
+        </>
       )}
     </div>
   );

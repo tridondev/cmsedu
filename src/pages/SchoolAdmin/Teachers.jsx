@@ -66,30 +66,40 @@ export default function Teachers({ schoolId }) {
   };
 
   return (
-    <div className="flex flex-col gap-8 max-w-3xl">
+    <div className="flex flex-col gap-8">
       <div>
-        <h3 className="text-lg font-semibold mb-3">Invite a teacher</h3>
+        <h3 className="page-title">Invite a teacher</h3>
+        <p className="page-subtitle mb-4">Create a login and assign class/subject responsibilities.</p>
         {classes.length === 0 ? (
           <p className="text-amber-600 text-sm">Create a class with subjects first — you'll assign the teacher to specific ones below.</p>
         ) : (
-          <form onSubmit={invite} className="flex flex-col gap-3 border rounded p-4">
-            <div className="flex gap-3">
-              <input className="border p-2 rounded flex-1" placeholder="Full name" value={name} onChange={(e) => setName(e.target.value)} />
-              <input className="border p-2 rounded flex-1" placeholder="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-              <input className="border p-2 rounded flex-1" placeholder="Temp password (min 8 chars)" type="text" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <form onSubmit={invite} className="card-pad flex flex-col gap-4 max-w-2xl">
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div>
+                <label className="field-label">Full name</label>
+                <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div>
+                <label className="field-label">Email</label>
+                <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </div>
+              <div>
+                <label className="field-label">Temp password</label>
+                <input className="input" type="text" placeholder="Min 8 chars" value={password} onChange={(e) => setPassword(e.target.value)} />
+              </div>
             </div>
 
             <div>
-              <label className="text-sm font-medium">Assign to class/subject</label>
-              <div className="flex flex-col gap-2 mt-2 max-h-56 overflow-y-auto border rounded p-2">
+              <label className="field-label">Assign to class/subject</label>
+              <div className="flex flex-col gap-3 max-h-64 overflow-y-auto border border-slate-200 rounded-xl p-3">
                 {classes.map((c) => (
                   <div key={c.id}>
                     <p className="text-xs font-semibold text-slate-500">{c.name}</p>
-                    <div className="flex flex-wrap gap-2 mt-1">
+                    <div className="flex flex-wrap gap-2 mt-1.5">
                       {(c.subjects || []).map((s) => {
                         const key = `${c.id}:${s.id}`;
                         return (
-                          <label key={key} className={`text-xs px-2 py-1 rounded-full border cursor-pointer ${selected[key] ? "bg-slate-900 text-white" : ""}`}>
+                          <label key={key} className={`chip ${selected[key] ? "chip-active" : ""}`}>
                             <input type="checkbox" className="hidden" checked={!!selected[key]} onChange={() => toggle(c.id, s.id)} />
                             {s.name}
                           </label>
@@ -101,9 +111,9 @@ export default function Teachers({ schoolId }) {
               </div>
             </div>
 
-            {error && <p className="text-red-600 text-sm">{error}</p>}
-            {success && <p className="text-green-700 text-sm">{success}</p>}
-            <button className="bg-slate-900 text-white p-2 rounded disabled:opacity-50 self-start px-4" disabled={saving}>
+            {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+            {success && <p className="text-emerald-700 text-sm bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">{success}</p>}
+            <button className="btn-primary self-start px-6" disabled={saving}>
               {saving ? "Creating…" : "Create teacher account"}
             </button>
           </form>
@@ -111,12 +121,12 @@ export default function Teachers({ schoolId }) {
       </div>
 
       <div>
-        <h3 className="text-lg font-semibold mb-3">Teachers ({teachers.length})</h3>
-        <div className="flex flex-col gap-2">
+        <h3 className="page-title">Teachers ({teachers.length})</h3>
+        <div className="flex flex-col gap-2 mt-4">
           {teachers.map((t) => (
-            <div key={t.id} className="border rounded p-3 text-sm">
-              <p className="font-medium">
-                {t.name} <span className="text-slate-400 font-normal">{t.email}</span>
+            <div key={t.id} className="row-card">
+              <p className="font-semibold text-slate-900 text-sm">
+                {t.name} <span className="text-slate-400 font-normal">· {t.email}</span>
               </p>
               <p className="text-slate-500 text-xs mt-1">
                 {(t.assignedSubjects || [])
@@ -129,7 +139,7 @@ export default function Teachers({ schoolId }) {
               </p>
             </div>
           ))}
-          {teachers.length === 0 && <p className="text-slate-400 text-sm">No teachers yet.</p>}
+          {teachers.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No teachers yet.</div>}
         </div>
       </div>
     </div>

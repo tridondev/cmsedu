@@ -29,10 +29,20 @@ export default function ImageUpload({ label, currentUrl, onUploaded }) {
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-sm font-medium">{label}</label>
-      {preview && <img src={preview} alt={label} className="h-16 object-contain border rounded" />}
-      <input type="file" accept="image/*" onChange={handleChange} disabled={uploading} />
-      {uploading && <p className="text-xs text-slate-500">Uploading…</p>}
+      <label className="field-label">{label}</label>
+      <div className="flex items-center gap-3">
+        <div className="h-16 w-16 shrink-0 rounded-xl border border-dashed border-slate-300 bg-slate-50 flex items-center justify-center overflow-hidden">
+          {preview ? (
+            <img src={preview} alt={label} className="h-full w-full object-contain" />
+          ) : (
+            <span className="text-slate-300 text-xs text-center px-1">No image</span>
+          )}
+        </div>
+        <label className="btn-secondary btn-sm cursor-pointer">
+          {uploading ? "Uploading…" : "Choose file"}
+          <input type="file" accept="image/*" className="hidden" onChange={handleChange} disabled={uploading} />
+        </label>
+      </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );

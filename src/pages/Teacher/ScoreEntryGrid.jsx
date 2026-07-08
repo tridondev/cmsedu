@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { computeSubjectTotal, gradeFor, computeClassPositions } from "../../lib/resultEngine";
@@ -32,6 +32,14 @@ async function recomputePositionsClientSide(schoolId, resultKey) {
     { merge: true }
   );
 }
+
+const FIELDS = [
+  { key: "ca1", label: "CA1" },
+  { key: "ca2", label: "CA2" },
+  { key: "test1", label: "Test 1" },
+  { key: "test2", label: "Test 2" },
+  { key: "exam", label: "Exam" },
+];
 
 export default function ScoreEntryGrid({ schoolId }) {
   const { classId, subjectId } = useParams();
@@ -99,64 +107,111 @@ export default function ScoreEntryGrid({ schoolId }) {
     setSavedRows((prev) => ({ ...prev, [studentId]: true }));
   };
 
-  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="card-pad h-14 animate-pulse bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
   if (!classInfo) return <p className="text-red-600">Class not found.</p>;
 
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-1">
+      <Link to="../.." relative="path" className="text-sm text-brand-600 font-medium mb-3 inline-flex items-center gap-1">
+        ← Back to my classes
+      </Link>
+      <h2 className="page-title">
         {classInfo.name} — {subject?.name || subjectId}
-      </h3>
-      <p className="text-sm text-slate-500 mb-4">{term} Term</p>
+      </h2>
+      <p className="page-subtitle mb-6">{term} Term score entry</p>
 
-      <table className="w-full text-sm border-collapse">
-        <thead>
-          <tr className="border-b">
-            <th className="text-left p-2">Student</th>
-            <th>CA1</th>
-            <th>CA2</th>
-            <th>Test1</th>
-            <th>Test2</th>
-            <th>Exam</th>
-            <th>Total</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {students.map((s) => {
-            const row = scores[s.id] || {};
-            const total = computeSubjectTotal(row, gradingScale);
-            return (
-              <tr key={s.id} className="border-b">
-                <td className="p-2">{s.fullName}</td>
-                {["ca1", "ca2", "test1", "test2", "exam"].map((f) => (
-                  <td key={f}>
-                    <input
-                      type="number"
-                      className="w-14 border rounded p-1"
-                      value={row[f] ?? ""}
-                      onChange={(e) => updateField(s.id, f, e.target.value)}
-                    />
+      {/* Desktop / tablet: table */}
+      <div className="hidden sm:block table-wrap">
+        <table className="table-modern">
+          <thead>
+            <tr>
+              <th>Student</th>
+              {FIELDS.map((f) => (
+                <th key={f.key} className="text-center">
+                  {f.label}
+                </th>
+              ))}
+              <th className="text-center">Total</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {students.map((s) => {
+              const row = scores[s.id] || {};
+              const total = computeSubjectTotal(row, gradingScale);
+              return (
+                <tr key={s.id}>
+                  <td className="font-medium text-slate-800">{s.fullName}</td>
+                  {FIELDS.map((f) => (
+                    <td key={f.key} className="text-center">
+                      <input
+                        type="number"
+                        className="input w-16 py-1.5 text-center mx-auto"
+                        value={row[f.key] ?? ""}
+                        onChange={(e) => updateField(s.id, f.key, e.target.value)}
+                      />
+                    </td>
+                  ))}
+                  <td className="text-center font-semibold text-slate-900">{total}</td>
+                  <td className="text-center">
+                    <button className="btn-sm btn-secondary" onClick={() => saveRow(s.id)}>
+                      {savedRows[s.id] ? "Saved ✓" : "Save"}
+                    </button>
                   </td>
-                ))}
-                <td className="text-center font-medium">{total}</td>
-                <td>
-                  <button className="text-blue-600" onClick={() => saveRow(s.id)}>
-                    {savedRows[s.id] ? "Saved ✓" : "Save"}
-                  </button>
+                </tr>
+              );
+            })}
+            {students.length === 0 && (
+              <tr>
+                <td colSpan={FIELDS.length + 3} className="p-6 text-center text-slate-400">
+                  No students in this class yet.
                 </td>
               </tr>
-            );
-          })}
-          {students.length === 0 && (
-            <tr>
-              <td colSpan={8} className="p-4 text-slate-400">
-                No students in this class yet.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile: stacked cards */}
+      <div className="sm:hidden flex flex-col gap-3">
+        {students.map((s) => {
+          const row = scores[s.id] || {};
+          const total = computeSubjectTotal(row, gradingScale);
+          return (
+            <div key={s.id} className="row-card">
+              <div className="flex items-center justify-between mb-1">
+                <p className="font-semibold text-slate-900 text-sm">{s.fullName}</p>
+                <span className="badge-brand">{total} pts</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                {FIELDS.map((f) => (
+                  <div key={f.key}>
+                    <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{f.label}</label>
+                    <input
+                      type="number"
+                      className="input py-1.5 text-center mt-0.5"
+                      value={row[f.key] ?? ""}
+                      onChange={(e) => updateField(s.id, f.key, e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <button className="btn-secondary btn-sm mt-3 w-full" onClick={() => saveRow(s.id)}>
+                {savedRows[s.id] ? "Saved ✓" : "Save score"}
+              </button>
+            </div>
+          );
+        })}
+        {students.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class yet.</div>}
+      </div>
     </div>
   );
 }

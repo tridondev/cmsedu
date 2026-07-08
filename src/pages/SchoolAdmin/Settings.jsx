@@ -38,48 +38,69 @@ export default function Settings({ schoolId }) {
     }
   };
 
-  if (!school) return <p className="text-slate-400">Loading…</p>;
+  if (!school) {
+    return (
+      <div className="flex flex-col gap-4">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="card-pad h-24 animate-pulse bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
 
   return (
-    <form onSubmit={save} className="flex flex-col gap-8 max-w-2xl">
-      <div>
-        <h3 className="text-lg font-semibold mb-3">School details</h3>
-        <div className="flex flex-col gap-3">
-          <input className="border p-2 rounded" placeholder="School name" {...field("name")} />
-          <input className="border p-2 rounded" placeholder="Address" {...field("address")} />
-          <input className="border p-2 rounded" placeholder="Ministry / regulatory body" {...field("ministry")} />
-          <ImageUpload
-            label="School logo"
-            currentUrl={school.logoUrl}
-            onUploaded={(url) => setSchool({ ...school, logoUrl: url })}
-          />
+    <form onSubmit={save} className="flex flex-col gap-6 max-w-2xl">
+      <div className="card-pad">
+        <h3 className="page-title mb-4">School details</h3>
+        <div className="flex flex-col gap-4">
+          <div>
+            <label className="field-label">School name</label>
+            <input className="input" {...field("name")} />
+          </div>
+          <div>
+            <label className="field-label">Address</label>
+            <input className="input" {...field("address")} />
+          </div>
+          <div>
+            <label className="field-label">Ministry / regulatory body</label>
+            <input className="input" {...field("ministry")} />
+          </div>
+          <ImageUpload label="School logo" currentUrl={school.logoUrl} onUploaded={(url) => setSchool({ ...school, logoUrl: url })} />
         </div>
       </div>
 
-      <div>
-        <h3 className="text-lg font-semibold mb-3">Current session & term</h3>
-        <div className="flex gap-3">
-          <input className="border p-2 rounded flex-1" placeholder="Session (e.g. 2025/2026)" {...field("currentSession")} />
-          <select className="border p-2 rounded" value={school.currentTerm || "First"} onChange={(e) => setSchool({ ...school, currentTerm: e.target.value })}>
-            {TERMS.map((t) => (
-              <option key={t} value={t}>
-                {t} Term
-              </option>
-            ))}
-          </select>
+      <div className="card-pad">
+        <h3 className="page-title mb-4">Current session & term</h3>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div>
+            <label className="field-label">Session</label>
+            <input className="input" placeholder="e.g. 2025/2026" {...field("currentSession")} />
+          </div>
+          <div>
+            <label className="field-label">Term</label>
+            <select className="input" value={school.currentTerm || "First"} onChange={(e) => setSchool({ ...school, currentTerm: e.target.value })}>
+              {TERMS.map((t) => (
+                <option key={t} value={t}>
+                  {t} Term
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <p className="text-xs text-slate-500 mt-1">
-          This controls which term teachers enter scores into by default, and which term the Results tab
-          previews first — students, past scores, and past exports for earlier terms aren't affected by
-          changing this.
+        <p className="text-xs text-slate-500 mt-3">
+          This controls which term teachers enter scores into by default, and which term the Results tab previews
+          first — students, past scores, and past exports for earlier terms aren't affected by changing this.
         </p>
       </div>
 
-      <div>
-        <h3 className="text-lg font-semibold mb-3">Signatures on the report card</h3>
-        <div className="grid grid-cols-2 gap-4">
+      <div className="card-pad">
+        <h3 className="page-title mb-4">Signatures on the report card</h3>
+        <div className="grid sm:grid-cols-2 gap-6">
           <div className="flex flex-col gap-3">
-            <input className="border p-2 rounded" placeholder="Principal's name" {...field("principalName")} />
+            <div>
+              <label className="field-label">Principal's name</label>
+              <input className="input" {...field("principalName")} />
+            </div>
             <ImageUpload
               label="Principal's signature"
               currentUrl={school.principalSigUrl}
@@ -87,7 +108,10 @@ export default function Settings({ schoolId }) {
             />
           </div>
           <div className="flex flex-col gap-3">
-            <input className="border p-2 rounded" placeholder="Default Form Master's name" {...field("formMasterDefaultName")} />
+            <div>
+              <label className="field-label">Default Form Master's name</label>
+              <input className="input" {...field("formMasterDefaultName")} />
+            </div>
             <ImageUpload
               label="Form Master's signature"
               currentUrl={school.formMasterSigUrl}
@@ -95,15 +119,15 @@ export default function Settings({ schoolId }) {
             />
           </div>
         </div>
-        <p className="text-xs text-slate-500 mt-2">
-          These are currently reference fields — wiring them into the exported image cells is a small
-          follow-up in exportToExcel.js once you're ready for it.
+        <p className="text-xs text-slate-500 mt-3">
+          These are currently reference fields — wiring them into the exported image cells is a small follow-up in
+          exportToExcel.js once you're ready for it.
         </p>
       </div>
 
-      {error && <p className="text-red-600 text-sm">{error}</p>}
-      {saved && <p className="text-green-700 text-sm">Saved.</p>}
-      <button className="bg-slate-900 text-white p-2 rounded disabled:opacity-50 self-start px-6" disabled={saving}>
+      {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+      {saved && <p className="text-emerald-700 text-sm bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">Saved.</p>}
+      <button className="btn-primary self-start px-8" disabled={saving}>
         {saving ? "Saving…" : "Save settings"}
       </button>
     </form>

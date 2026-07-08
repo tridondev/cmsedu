@@ -63,41 +63,51 @@ export default function Classes({ schoolId }) {
   };
 
   return (
-    <div className="flex flex-col gap-8 max-w-3xl">
+    <div className="flex flex-col gap-8">
       <div>
-        <h3 className="text-lg font-semibold mb-3">Add a class</h3>
-        <form onSubmit={createClass} className="flex flex-col gap-3 border rounded p-4">
-          <div className="flex gap-3">
-            <input
-              className="border p-2 rounded flex-1"
-              placeholder='Class name (e.g. "JSS 1", "SS 2 Science")'
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <select className="border p-2 rounded" value={level} onChange={(e) => setLevel(e.target.value)}>
-              {LEVELS.map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
-              ))}
-            </select>
-            {isSenior && (
-              <select className="border p-2 rounded" value={stream} onChange={(e) => setStream(e.target.value)}>
-                <option value="">Stream…</option>
-                {STREAMS.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+        <h3 className="page-title">Add a class</h3>
+        <p className="page-subtitle mb-4">Define the level, optional stream, and subjects taught.</p>
+        <form onSubmit={createClass} className="card-pad flex flex-col gap-4 max-w-2xl">
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-1">
+              <label className="field-label">Class name</label>
+              <input
+                className="input"
+                placeholder='e.g. "SS 2 Science"'
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="field-label">Level</label>
+              <select className="input" value={level} onChange={(e) => setLevel(e.target.value)}>
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
                   </option>
                 ))}
               </select>
+            </div>
+            {isSenior && (
+              <div>
+                <label className="field-label">Stream</label>
+                <select className="input" value={stream} onChange={(e) => setStream(e.target.value)}>
+                  <option value="">Stream…</option>
+                  {STREAMS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
           </div>
 
           <div>
-            <label className="text-sm font-medium">Subjects</label>
-            <div className="flex gap-2 mt-1">
+            <label className="field-label">Subjects</label>
+            <div className="flex gap-2">
               <input
-                className="border p-2 rounded flex-1"
+                className="input flex-1"
                 placeholder="Subject name, then Enter"
                 value={subjectDraft}
                 onChange={(e) => setSubjectDraft(e.target.value)}
@@ -108,16 +118,20 @@ export default function Classes({ schoolId }) {
                   }
                 }}
               />
-              <button type="button" className="border px-3 rounded" onClick={addSubject}>
+              <button type="button" className="btn-secondary shrink-0" onClick={addSubject}>
                 Add
               </button>
             </div>
             {subjects.length > 0 && (
-              <div className="flex flex-wrap gap-2 mt-2">
+              <div className="flex flex-wrap gap-2 mt-3">
                 {subjects.map((s) => (
-                  <span key={s.id} className="bg-slate-100 rounded-full px-3 py-1 text-sm flex items-center gap-2">
+                  <span key={s.id} className="badge-brand pr-1.5">
                     {s.name}
-                    <button type="button" className="text-slate-400" onClick={() => removeSubject(s.id)}>
+                    <button
+                      type="button"
+                      className="h-4 w-4 rounded-full bg-brand-100 hover:bg-brand-200 text-brand-700 flex items-center justify-center text-xs"
+                      onClick={() => removeSubject(s.id)}
+                    >
                       ×
                     </button>
                   </span>
@@ -126,31 +140,31 @@ export default function Classes({ schoolId }) {
             )}
           </div>
 
-          {error && <p className="text-red-600 text-sm">{error}</p>}
-          <button className="bg-slate-900 text-white p-2 rounded disabled:opacity-50 self-start px-4" disabled={saving}>
+          {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+          <button className="btn-primary self-start px-6" disabled={saving}>
             {saving ? "Saving…" : "Create class"}
           </button>
         </form>
       </div>
 
       <div>
-        <h3 className="text-lg font-semibold mb-3">Classes ({classes.length})</h3>
-        <div className="flex flex-col gap-2">
+        <h3 className="page-title">Classes ({classes.length})</h3>
+        <div className="flex flex-col gap-2 mt-4">
           {classes.map((c) => (
-            <div key={c.id} className="border rounded p-3 flex items-center justify-between text-sm">
+            <div key={c.id} className="row-card sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <span className="font-medium">{c.name}</span>{" "}
-                <span className="text-slate-400">
+                <p className="font-semibold text-slate-900 text-sm">{c.name}</p>
+                <p className="text-slate-400 text-xs mt-0.5">
                   {c.level}
                   {c.stream ? ` · ${c.stream}` : ""} · {c.subjects?.length || 0} subjects
-                </span>
+                </p>
               </div>
-              <button className="text-red-600" onClick={() => removeClass(c.id)}>
+              <button className="btn-sm btn-danger self-start sm:self-auto mt-2 sm:mt-0" onClick={() => removeClass(c.id)}>
                 Delete
               </button>
             </div>
           ))}
-          {classes.length === 0 && <p className="text-slate-400 text-sm">No classes yet.</p>}
+          {classes.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No classes yet.</div>}
         </div>
       </div>
     </div>

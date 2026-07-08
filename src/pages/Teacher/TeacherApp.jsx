@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useAuth } from "../../context/AuthContext";
+import AppShell from "../../components/AppShell";
 import ScoreEntryGrid from "./ScoreEntryGrid";
 
 function TeacherHome({ schoolId }) {
@@ -30,13 +31,24 @@ function TeacherHome({ schoolId }) {
     })();
   }, [schoolId, user]);
 
-  if (loading) return <p className="text-slate-400">Loading…</p>;
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-3">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="card-pad h-16 animate-pulse bg-slate-100" />
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div>
-      <h2 className="text-xl font-semibold mb-4">Your classes</h2>
-      {assignments.length === 0 && <p className="text-slate-400 text-sm">No subjects assigned yet — ask your school admin.</p>}
-      <div className="flex flex-col gap-2 max-w-md">
+      <h2 className="page-title">Your classes</h2>
+      <p className="page-subtitle mb-6">Tap a class/subject to enter scores.</p>
+      {assignments.length === 0 && (
+        <div className="card-pad text-center text-slate-400 text-sm">No subjects assigned yet — ask your school admin.</div>
+      )}
+      <div className="grid sm:grid-cols-2 gap-3">
         {assignments.map((a) => {
           const cls = classNames[a.classId];
           const subject = cls?.subjects?.find((s) => s.id === a.subjectId);
@@ -44,10 +56,13 @@ function TeacherHome({ schoolId }) {
             <Link
               key={`${a.classId}:${a.subjectId}`}
               to={`entry/${a.classId}/${a.subjectId}`}
-              className="border rounded p-3 hover:bg-slate-50 text-sm"
+              className="card-pad hover:shadow-lifted hover:-translate-y-0.5 transition flex items-center justify-between"
             >
-              <span className="font-medium">{cls?.name || a.classId}</span>{" "}
-              <span className="text-slate-500">— {subject?.name || a.subjectId}</span>
+              <div>
+                <p className="font-semibold text-slate-900 text-sm">{cls?.name || a.classId}</p>
+                <p className="text-slate-500 text-xs mt-0.5">{subject?.name || a.subjectId}</p>
+              </div>
+              <span className="text-brand-600 text-lg">→</span>
             </Link>
           );
         })}
@@ -56,13 +71,16 @@ function TeacherHome({ schoolId }) {
   );
 }
 
+const TABS = [{ to: "", label: "My classes", end: true }];
+
 export default function TeacherApp({ schoolId }) {
+  const { logout } = useAuth();
   return (
-    <div className="p-6">
+    <AppShell eyebrow="Teacher" title="Score Entry" subtitle="CMSEDU" navItems={TABS} onLogout={logout}>
       <Routes>
         <Route index element={<TeacherHome schoolId={schoolId} />} />
         <Route path="entry/:classId/:subjectId" element={<ScoreEntryGrid schoolId={schoolId} />} />
       </Routes>
-    </div>
+    </AppShell>
   );
 }
