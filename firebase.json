@@ -1,0 +1,10 @@
+{
+  "hosting": {
+    "public": "dist",
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+  },
+  "firestore": {
+    "rules": "firebase/firestore.rules"
+  },
+  "functions": { "source": "functions" }
+}

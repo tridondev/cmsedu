@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isPlatformAdmin() {
+      return exists(/databases/$(database)/documents/platformAdmins/$(request.auth.uid));
+    }
+
+    function claimSchoolId() {
+      return request.auth.token.schoolId;
+    }
+
+    function isSchoolAdmin(schoolId) {
+      return request.auth != null
+        && claimSchoolId() == schoolId
+        && request.auth.token.role == 'admin';
+    }
+
+    function isTeacher(schoolId) {
+      return request.auth != null
+        && claimSchoolId() == schoolId
+        && request.auth.token.role == 'teacher';
+    }
+
+    // ---- Platform level (Super Admin only) ----
+    match /platformAdmins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false; // managed only via Admin SDK / Cloud Function
+    }
+
+    match /slugs/{slug} {
+      allow read: if true; // needed to resolve /educms/:slug before auth
+      allow write: if isPlatformAdmin();
+    }
+
+    match /schools/{schoolId} {
+      allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+      allow create, delete: if isPlatformAdmin();
+      allow update: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+
+      match /users/{userId} {
+        allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || request.auth.uid == userId;
+        allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+      }
+
+      match /classes/{classId} {
+        allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+        allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+
+        match /students/{studentId} {
+          allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+        }
+      }
+
+      match /results/{docId} {
+        allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+        allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+
+        match /scores/{scoreId} {
+          allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          // Teachers may only write while term is unlocked; enforced fully via Cloud Function
+          // validating assignedSubjects, since rules can't cheaply cross-reference arrays here.
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+        }
+
+        // SPARK-PLAN NOTE: normally only the recomputeClassPositions Cloud
+        // Function (running with admin privileges) writes here. Without
+        // Blaze, the client recomputes and writes this doc directly after
+        // each score save (see ScoreEntryGrid.jsx) — so teachers need write
+        // access here too for now. Tighten this back to admin-only once
+        // Cloud Functions are deployed and the client-side call is removed.
+        match /meta/{metaId} {
+          allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+        }
+      }
+
+      match /exports/{exportId} {
+        allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+        allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+      }
+    }
+  }
+}
