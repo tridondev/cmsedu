@@ -324,7 +324,7 @@ export default function Landing() {
 
       <header className="px-5 sm:px-8 py-5 flex items-center justify-between">
         <div className="inline-flex items-center gap-2 font-display font-extrabold text-slate-900 text-lg">
-          <span className="h-8 w-8 rounded-lg bg-brand-600 text-white flex items-center justify-center text-sm">C</span>
+          <img src="/logo.png" alt="CMSEDU logo" className="h-9 w-9 rounded-lg object-contain" />
           CMSEDU
         </div>
         <a href={WHATSAPP_HREF} className="btn-secondary btn-sm hidden sm:inline-flex">

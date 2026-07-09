@@ -27,13 +27,64 @@ const BAND_LETTERS = ["A", "B", "C", "D", "E"]; // behaviour rating bands
 
 // -------------------------------------------------------------------------
 // Design tokens — colors/fonts lifted directly from the real template.
+// These are the DEFAULTS the school's real report card uses. They're kept
+// as `let` bindings (rather than `const`) so `applyColorTheme()` can swap
+// them out for admin-picked colors right before a block is rendered —
+// every helper below (cell, bandHeader, mergeStyled, writeSingleTermBlock,
+// writeThirdTermBlock) reads these as free variables, so reassigning them
+// here is all that's needed to re-theme the whole export.
 // -------------------------------------------------------------------------
 const FONT = "Tahoma";
-const NAVY = "FF002060"; // headings, subject names, key figures
-const BLUE = "FF0070C0"; // field labels, behaviour rows
-const LIGHT_BLUE = "FF00B0F0"; // sub-headline banner text
-const WHITE = "FFFFFFFF"; // text sitting on a navy fill band
-const BLACK = "FF000000";
+const DEFAULT_NAVY = "FF002060"; // headings, subject names, key figures
+const DEFAULT_BLUE = "FF0070C0"; // field labels, behaviour rows
+const DEFAULT_LIGHT_BLUE = "FF00B0F0"; // sub-headline banner text
+const DEFAULT_WHITE = "FFFFFFFF"; // text sitting on a navy fill band
+const DEFAULT_BLACK = "FF000000";
+
+/** Colors an admin can customize, keyed by name, with the template's original values as defaults. */
+export const DEFAULT_COLORS = {
+  navy: DEFAULT_NAVY,
+  blue: DEFAULT_BLUE,
+  lightBlue: DEFAULT_LIGHT_BLUE,
+  white: DEFAULT_WHITE,
+  black: DEFAULT_BLACK,
+};
+
+let NAVY = DEFAULT_NAVY;
+let BLUE = DEFAULT_BLUE;
+let LIGHT_BLUE = DEFAULT_LIGHT_BLUE;
+let WHITE = DEFAULT_WHITE;
+let BLACK = DEFAULT_BLACK;
+
+/**
+ * Normalizes a color into the 8-hex-digit ARGB string ExcelJS expects
+ * ("FFRRGGBB"). Accepts what an HTML <input type="color"> gives you
+ * ("#rrggbb" or "rrggbb"), or an already-correct ARGB string, so callers
+ * don't need to know ExcelJS's format — they just pass whatever the color
+ * picker returns.
+ */
+function toArgb(input, fallback) {
+  if (!input || typeof input !== "string") return fallback;
+  const hex = input.trim().replace(/^#/, "");
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) return `FF${hex.toUpperCase()}`;
+  if (/^[0-9a-fA-F]{8}$/.test(hex)) return hex.toUpperCase();
+  return fallback;
+}
+
+/**
+ * Applies an admin-selected color theme before a report is generated.
+ * `colors` is a partial object of { navy, blue, lightBlue, white, black }
+ * — any key that's missing or invalid falls back to the template's
+ * original default for that role, so an admin can override just one
+ * color (e.g. only `navy`) and everything else stays as-is.
+ */
+function applyColorTheme(colors = {}) {
+  NAVY = toArgb(colors.navy, DEFAULT_NAVY);
+  BLUE = toArgb(colors.blue, DEFAULT_BLUE);
+  LIGHT_BLUE = toArgb(colors.lightBlue, DEFAULT_LIGHT_BLUE);
+  WHITE = toArgb(colors.white, DEFAULT_WHITE);
+  BLACK = toArgb(colors.black, DEFAULT_BLACK);
+}
 
 // -------------------------------------------------------------------------
 // Row heights & column widths — measured directly from the real template
@@ -560,7 +611,8 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
 
   const totalRow = r(36);
   const average = classInfo.subjects.length ? total / classInfo.subjects.length : 0;
-  cell(sheet, totalRow, 1, "TOTAL", { bold: true, size: 28 });
+  cell(sheet, totalRow, 1, "TOTAL =", { bold: true, size: 28 });
+  cell(sheet, totalRow, 2, Math.round(total * 100) / 100, { bold: true, size: 28 });
   merge(sheet, totalRow, 8, r(37), 9);
   cell(sheet, totalRow, 8, "AVERAGE:", { bold: true, align: "center", size: 28 });
   merge(sheet, totalRow, 10, totalRow, 11);
@@ -571,6 +623,16 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, totalRow, 14, Math.round(average * 100) / 100, { bold: true, align: "center", size: 28 });
   merge(sheet, r(37), 10, r(37), 11);
   cell(sheet, r(37), 10, classInfo.subjects.length, { align: "center", bold: true, size: 28 });
+  // Fraction bar: a line separating the AVERAGE's numerator (total, row
+  // above) from its denominator (subject count, row below) so it reads as
+  // an actual stacked fraction rather than two numbers floating with
+  // nothing between them. Set on both the numerator's bottom and the
+  // denominator's top (not just one) since Excel resolves a merged range's
+  // border from whichever side each contributing cell defines.
+  [10, 11].forEach((c) => {
+    sheet.getRow(totalRow).getCell(c).border = { bottom: { style: "medium" } };
+    sheet.getRow(r(37)).getCell(c).border = { top: { style: "medium" } };
+  });
 
   bandHeader(sheet, r(39), 3, r(39), 7, "Ratings", { size: 24, border: true });
   bandHeader(sheet, r(39), 9, r(39), 14, "ANNUAL SUMMARY", { size: 26, border: true });
@@ -673,9 +735,20 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
  *                               // Third Term only:
  *                               cumulativePosition, promotionComment }]
  * @param {Object} options    { isThirdTerm: boolean,
- *                               cumulative: { [studentId]: { [subjectId]: { term1, term2 } } } }
+ *                               cumulative: { [studentId]: { [subjectId]: { term1, term2 } } },
+ *                               colors: { navy, blue, lightBlue, white, black } — optional,
+ *                                 partial overrides for the report's color scheme. Each value
+ *                                 can be a "#rrggbb" string (what an HTML color input gives you)
+ *                                 or an ARGB string. Any color left out keeps the template's
+ *                                 original default — see DEFAULT_COLORS. }
  */
 export async function exportClassResults(school, classInfo, students, options = {}) {
+  // Re-theme the module's color tokens for this export. Must happen before
+  // any writeXBlock() call below, since those (and the cell/bandHeader
+  // helpers they use) read NAVY/BLUE/LIGHT_BLUE/WHITE/BLACK as free
+  // variables rather than taking colors as an argument.
+  applyColorTheme(options.colors);
+
   const wb = new ExcelJS.Workbook();
   const sheet = wb.addWorksheet(classInfo.term || "Result");
   const isThirdTerm = !!options.isThirdTerm;
@@ -726,8 +799,23 @@ export async function exportClassResults(school, classInfo, students, options = 
     printArea: `A1:${sheet.getColumn(colCount).letter}${BLOCK_HEIGHT * students.length}`,
   };
 
+  // --- Order pages by class position: 1st position -> first page --------
+  // `overallPosition` may come in as a plain number (1, 2, 3...) or a
+  // formatted string ("1st", "2nd", "3rd"...), so pull the leading digits
+  // out rather than assuming a type. Students with a missing/unparseable
+  // position are pushed to the end instead of sorting to the top (which is
+  // what would happen with a naive numeric sort, since NaN comparisons are
+  // unreliable and 0/undefined would otherwise look like "first").
+  const positionOf = (student) => {
+    const raw = student.overallPosition;
+    if (raw === null || raw === undefined) return Infinity;
+    const match = String(raw).match(/\d+/);
+    return match ? parseInt(match[0], 10) : Infinity;
+  };
+  const orderedStudents = [...students].sort((a, b) => positionOf(a) - positionOf(b));
+
   let top = 1;
-  students.forEach((student, i) => {
+  orderedStudents.forEach((student, i) => {
     if (isThirdTerm) {
       writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId);
     } else {
