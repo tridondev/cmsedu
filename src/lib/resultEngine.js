@@ -64,6 +64,74 @@ export function gradeFor(total, gradingScale, customBands) {
   return hit ? { grade: hit.grade, remark: hit.remark } : { grade: "-", remark: "-" };
 }
 
+/** The 12 behaviour/activity rows shown on the report card, in template order. */
+export const BEHAVIOUR_CRITERIA = [
+  "Punctuality",
+  "Attendance in Class",
+  "Attentiveness in Class",
+  "Carrying out Assignments",
+  "Participation in School Activities",
+  "Neatness",
+  "Honesty",
+  "Self Control",
+  "Relationship with Others",
+  "Helping Others",
+  "Games, Sports",
+  "Handling of Tools, Lab & Workshop",
+];
+
+export const RATING_BANDS = ["A", "B", "C", "D", "E"];
+
+/**
+ * Given a student's overall average, auto-drafts a Form Master's and
+ * Principal's remark in the same style/tone as the school's real filled
+ * reports. Always returned as plain editable text — the admin can tweak
+ * the wording before exporting, this just removes the blank-page problem.
+ */
+const REMARK_TIERS = [
+  {
+    min: 70,
+    tier: "EXCELLENT",
+    formMaster: "An excellent result. Keep up the outstanding work.",
+    principal: "An excellent performance. Well done, keep it up.",
+  },
+  {
+    min: 60,
+    tier: "V.GOOD",
+    formMaster: "A very good result, with more effort, you can attain excellence.",
+    principal: "A very good performance, you can do better next term.",
+  },
+  {
+    min: 50,
+    tier: "GOOD",
+    formMaster: "A good result, with more effort, you can do better next term.",
+    principal: "A good performance, you can do better next term.",
+  },
+  {
+    min: 45,
+    tier: "PASS",
+    formMaster: "A fair result — more effort is needed in your studies.",
+    principal: "Can do better next term with more effort.",
+  },
+  {
+    min: 40,
+    tier: "FAIR",
+    formMaster: "A weak result. Serious improvement is required next term.",
+    principal: "Needs to work much harder next term.",
+  },
+  {
+    min: 0,
+    tier: "FAIL",
+    formMaster: "A poor result. Extra effort and commitment are needed urgently.",
+    principal: "Must improve significantly next term.",
+  },
+];
+
+export function autoRemarks(average) {
+  const hit = REMARK_TIERS.find((t) => average >= t.min) || REMARK_TIERS[REMARK_TIERS.length - 1];
+  return { tier: hit.tier, formMasterRemark: hit.formMaster, principalRemark: hit.principal };
+}
+
 /**
  * Ranks students for one subject (or overall) with proper tie handling,
  * producing "1st", "2nd", "2nd", "4th" style strings like the template.

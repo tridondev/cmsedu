@@ -74,6 +74,13 @@ service cloud.firestore {
           allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
           allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
         }
+
+        // Behaviour ratings + Form Master's/Principal's remarks + signature
+        // date, entered by the admin per student (see StudentReportModal.jsx).
+        match /reportMeta/{studentId} {
+          allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+        }
       }
 
       match /exports/{exportId} {

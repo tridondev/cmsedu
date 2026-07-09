@@ -43,7 +43,27 @@ export default function ImageUpload({ label, currentUrl, onUploaded }) {
           <input type="file" accept="image/*" className="hidden" onChange={handleChange} disabled={uploading} />
         </label>
       </div>
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {error && (
+        <div className="text-xs text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2 max-w-md">
+          {error.includes("not configured") ? (
+            <>
+              <p className="font-semibold mb-1">Image upload isn't set up yet.</p>
+              <p>
+                This needs a free Cloudinary account (no card required): sign up at{" "}
+                <a href="https://cloudinary.com" target="_blank" rel="noreferrer" className="underline">
+                  cloudinary.com
+                </a>
+                , copy your <b>Cloud name</b> from the dashboard, then Settings → Upload → Upload presets → add an
+                <b> unsigned</b> preset and copy its name. Add both as <code>VITE_CLOUDINARY_CLOUD_NAME</code> and{" "}
+                <code>VITE_CLOUDINARY_UPLOAD_PRESET</code> to your <code>.env</code> file (and to your host's
+                environment variables if deployed), then redeploy/restart.
+              </p>
+            </>
+          ) : (
+            error
+          )}
+        </div>
+      )}
     </div>
   );
 }

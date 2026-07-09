@@ -3,6 +3,7 @@ import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, setDoc } 
 import { db } from "../../firebase/config";
 import { computeClassPositions, computeCumulativeTerm } from "../../lib/resultEngine";
 import { exportClassResults, downloadWorkbook } from "../../lib/exportToExcel";
+import StudentReportModal from "../../components/StudentReportModal";
 
 const TERMS = ["First", "Second", "Third"];
 
@@ -26,6 +27,9 @@ export default function Results({ schoolId }) {
   const [students, setStudents] = useState([]);
   const [scoresByStudent, setScoresByStudent] = useState({});
   const [positions, setPositions] = useState({});
+  const [reportMeta, setReportMeta] = useState({}); // { [studentId]: { behaviour, formMasterRemark, principalRemark, signatureDate, promotionComment } }
+  const [termDates, setTermDates] = useState({ termEndingDate: "", nextTermBegins: "" });
+  const [reportStudentId, setReportStudentId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -61,6 +65,18 @@ export default function Results({ schoolId }) {
       setScoresByStudent(await fetchTermScores(schoolId, classId, term));
       const metaSnap = await getDoc(doc(db, "schools", schoolId, "results", resultKey, "meta", "positions"));
       setPositions(metaSnap.exists() ? metaSnap.data().positions || {} : {});
+
+      const resultDocSnap = await getDoc(doc(db, "schools", schoolId, "results", resultKey));
+      const resultData = resultDocSnap.exists() ? resultDocSnap.data() : {};
+      setTermDates({
+        termEndingDate: resultData.termEndingDate || "",
+        nextTermBegins: resultData.nextTermBegins || "",
+      });
+
+      const reportSnap = await getDocs(collection(db, "schools", schoolId, "results", resultKey, "reportMeta"));
+      const meta = {};
+      reportSnap.forEach((d) => (meta[d.id] = d.data()));
+      setReportMeta(meta);
     })();
   }, [schoolId, classId, term]);
 
@@ -92,9 +108,23 @@ export default function Results({ schoolId }) {
     }
   };
 
+  const saveTermDates = async (patch) => {
+    const next = { ...termDates, ...patch };
+    setTermDates(next);
+    await setDoc(doc(db, "schools", schoolId, "results", `${term}_${classId}`), next, { merge: true });
+  };
+
+  const saveReportMeta = async (studentId, data) => {
+    await setDoc(doc(db, "schools", schoolId, "results", `${term}_${classId}`, "reportMeta", studentId), data, {
+      merge: true,
+    });
+    setReportMeta((prev) => ({ ...prev, [studentId]: { ...prev[studentId], ...data } }));
+  };
+
   const buildStudentExportData = (studentId) => {
     const s = students.find((st) => st.id === studentId);
     const pos = positions[studentId] || {};
+    const meta = reportMeta[studentId] || {};
     const scores = {};
     subjects.forEach((subj) => {
       const raw = scoresByStudent[studentId]?.[subj.id] || {};
@@ -114,6 +144,11 @@ export default function Results({ schoolId }) {
       scores,
       overallPosition: pos.overallPosition || "",
       overallAverage: pos.overallAverage || "",
+      behaviour: meta.behaviour || {},
+      formMasterRemark: meta.formMasterRemark || "",
+      principalRemark: meta.principalRemark || "",
+      signatureDate: meta.signatureDate || "",
+      promotionComment: meta.promotionComment || "",
     };
   };
 
@@ -129,8 +164,8 @@ export default function Results({ schoolId }) {
         session: school?.currentSession || "",
         term: `${term} Term`,
         noInClass: students.length,
-        termEndingDate: "",
-        nextTermBegins: "",
+        termEndingDate: termDates.termEndingDate,
+        nextTermBegins: termDates.nextTermBegins,
         subjects,
       };
 
@@ -170,7 +205,7 @@ export default function Results({ schoolId }) {
       }
 
       const buffer = await exportClassResults(
-        { name: school?.name, address: school?.address, ministry: school?.ministry },
+        { name: school?.name, address: school?.address, ministry: school?.ministry, logoUrl: school?.logoUrl },
         classInfo,
         exportStudents,
         { isThirdTerm, cumulative }
@@ -213,6 +248,26 @@ export default function Results({ schoolId }) {
             ))}
           </select>
         </div>
+        <div className="flex-1">
+          <label className="field-label">Term ending</label>
+          <input
+            className="input"
+            placeholder="e.g. 12th December, 2025"
+            value={termDates.termEndingDate}
+            onChange={(e) => setTermDates((prev) => ({ ...prev, termEndingDate: e.target.value }))}
+            onBlur={(e) => saveTermDates({ termEndingDate: e.target.value })}
+          />
+        </div>
+        <div className="flex-1">
+          <label className="field-label">Next term begins</label>
+          <input
+            className="input"
+            placeholder="e.g. 5th January, 2026"
+            value={termDates.nextTermBegins}
+            onChange={(e) => setTermDates((prev) => ({ ...prev, nextTermBegins: e.target.value }))}
+            onBlur={(e) => saveTermDates({ nextTermBegins: e.target.value })}
+          />
+        </div>
         <div className="flex gap-2">
           <button className="btn-secondary" disabled={busy || !classId} onClick={recompute}>
             Recompute positions
@@ -242,6 +297,7 @@ export default function Results({ schoolId }) {
                   <th className="text-center">Total</th>
                   <th className="text-center">Average</th>
                   <th className="text-center">Position</th>
+                  <th className="text-center">Report</th>
                 </tr>
               </thead>
               <tbody>
@@ -260,12 +316,17 @@ export default function Results({ schoolId }) {
                       <td className="text-center">
                         <span className="badge-brand">{pos.overallPosition ?? "-"}</span>
                       </td>
+                      <td className="text-center">
+                        <button className="btn-secondary btn-sm" onClick={() => setReportStudentId(s.id)}>
+                          Ratings &amp; remarks
+                        </button>
+                      </td>
                     </tr>
                   );
                 })}
                 {students.length === 0 && (
                   <tr>
-                    <td className="p-6 text-center text-slate-400" colSpan={subjects.length + 4}>
+                    <td className="p-6 text-center text-slate-400" colSpan={subjects.length + 5}>
                       No students in this class.
                     </td>
                   </tr>
@@ -296,12 +357,26 @@ export default function Results({ schoolId }) {
                     <span className="text-slate-500">Total: <b className="text-slate-800">{pos.overallTotal ?? "-"}</b></span>
                     <span className="text-slate-500">Average: <b className="text-slate-800">{pos.overallAverage ?? "-"}</b></span>
                   </div>
+                  <button className="btn-secondary btn-sm w-full mt-2" onClick={() => setReportStudentId(s.id)}>
+                    Ratings &amp; remarks
+                  </button>
                 </div>
               );
             })}
             {students.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class.</div>}
           </div>
         </>
+      )}
+
+      {reportStudentId && (
+        <StudentReportModal
+          student={students.find((s) => s.id === reportStudentId)}
+          average={positions[reportStudentId]?.overallAverage}
+          isThirdTerm={term === "Third"}
+          initial={reportMeta[reportStudentId]}
+          onClose={() => setReportStudentId(null)}
+          onSave={(data) => saveReportMeta(reportStudentId, data)}
+        />
       )}
     </div>
   );
