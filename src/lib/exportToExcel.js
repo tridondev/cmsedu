@@ -35,6 +35,44 @@ const LIGHT_BLUE = "FF00B0F0"; // sub-headline banner text
 const WHITE = "FFFFFFFF"; // text sitting on a navy fill band
 const BLACK = "FF000000";
 
+// -------------------------------------------------------------------------
+// Row heights & column widths — measured directly from the real template
+// files (third_term.xlsx "Third Term"/"First Term" sheets, and the JSS2
+// "Second term" sheet), one entry per block-relative row (0..BLOCK_HEIGHT-1)
+// so every export reproduces the exact vertical rhythm and column
+// proportions of the original Gaskiya report card instead of relying on
+// Excel's default ~15pt row height / 8.43-char column width.
+// -------------------------------------------------------------------------
+const ROW_HEIGHTS_SINGLE = [
+  66, 27.75, 46.5, 39, 31.5, 31.5, 31.5, 35.25, 39, 39.75, // 0-9: header block
+  21, 21, // 10-11: spacer
+  36.75, 31.5, 31.5, 31.5, 31.5, // 12-16: ACADEMIC RECORDS band + table header
+  ...Array(19).fill(41.25), // 17-35: subject rows
+  31.5, 31.5, 31.5, 31.5, // 36-39: TOTAL/AVERAGE block + spacer
+  ...Array(14).fill(33.75), // 40-53: Ratings band + behaviour rows
+  54.75, 36.75, 42.75, 31.5, 31.5, 46.5, // 54-59: remarks/signatures
+];
+
+const ROW_HEIGHTS_THIRD = [
+  66, 27.75, 46.5, 39, 44.25, 44.25, 44.25, 44.25, 44.25, 44.25, // 0-9: header block
+  46.5, // 10: spacer
+  51.75, 51.75, 51.75, 51.75, 51.75, // 11-15: ACADEMIC RECORDS band + table header
+  ...Array(19).fill(41.25), // 16-34: subject rows
+  31.5, 37.5, 39, 46.5, 50.25, // 35-39: TOTAL/AVERAGE block + Ratings/Annual Summary band
+  ...Array(15).fill(54.75), // 40-54: behaviour rows + annual summary figures
+  42.75, 46.5, 35.25, 46.5, 50.25, // 55-59: remarks/signatures
+];
+
+const COLUMN_WIDTHS_SINGLE = [46.86, 18.14, 13.71, 19.43, 19.86, 19.29, 28.71, 22.86, 24.29, 16.14, 33.29];
+const COLUMN_WIDTHS_THIRD = [60.57, 12.57, 13.29, 18.14, 13.71, 19.43, 19.86, 18.86, 30.57, 24.71, 24.29, 22.14, 16.14, 33.29];
+
+/** Applies the full 60-row height template to one student block, starting at `top`. */
+function applyBlockRowHeights(sheet, top, heights) {
+  heights.forEach((h, i) => {
+    sheet.getRow(top + i).height = h;
+  });
+}
+
 /** Utility: set a cell's value, optionally merging a range and applying style. */
 function cell(sheet, row, col, value, opts = {}) {
   const c = sheet.getRow(row).getCell(col);
@@ -68,6 +106,31 @@ function merge(sheet, r1, c1, r2, c2) {
   }
 }
 
+/**
+ * Merges a range AND stamps the same alignment/border onto every cell in
+ * that range, not just the top-left one. Excel itself only looks at the
+ * top-left cell's style for a merged range, but some other viewers (Google
+ * Sheets import, LibreOffice, some mobile viewers) render merged-cell text
+ * using whichever cell they treat as anchor, so setting it everywhere makes
+ * centering/borders robust regardless of viewer.
+ */
+function mergeStyled(sheet, r1, c1, r2, c2, opts = {}) {
+  merge(sheet, r1, c1, r2, c2);
+  for (let r = r1; r <= r2; r++) {
+    for (let c = c1; c <= c2; c++) {
+      const existing = sheet.getRow(r).getCell(c);
+      existing.alignment = {
+        horizontal: opts.align || "center",
+        vertical: "middle",
+        wrapText: opts.wrap ?? true,
+      };
+      if (opts.border) {
+        existing.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+      }
+    }
+  }
+}
+
 /** A cell that also fills its whole merged range with a solid color. */
 function bandHeader(sheet, r1, c1, r2, c2, value, opts = {}) {
   merge(sheet, r1, c1, r2, c2);
@@ -78,9 +141,9 @@ function bandHeader(sheet, r1, c1, r2, c2, value, opts = {}) {
 // Logo embedding
 // -------------------------------------------------------------------------
 /**
- * Fetches the school logo (if a URL is configured) once per export and
- * returns an ExcelJS image id, or null if unavailable/unset. Failures here
- * never abort the export — the report is still fully usable without a logo.
+ * Fetches a logo image (if a URL is configured) once per export and returns
+ * an ExcelJS image id, or null if unavailable/unset. Failures here never
+ * abort the export — the report is still fully usable without a logo.
  */
 async function registerLogo(wb, logoUrl) {
   if (!logoUrl) return null;
@@ -96,34 +159,80 @@ async function registerLogo(wb, logoUrl) {
   }
 }
 
-/** Places the logo near the top-left of a block, roughly matching the source template's badge position. */
-function placeLogo(sheet, logoImageId, top) {
-  if (logoImageId == null) return;
-  sheet.addImage(logoImageId, {
-    tl: { col: 0.15, row: top - 1 + 0.1 },
-    ext: { width: 70, height: 70 },
-  });
+/**
+ * Places the Federal Government logo at the top-LEFT of a block, and the
+ * school's own logo at the top-RIGHT — matching the position swap the
+ * school asked for (govt logo where the school logo used to sit).
+ * `colCount` is 11 for single-term layouts and 14 for the third-term one,
+ * so the right-hand logo lands correctly on either layout.
+ *
+ * Both logos render at 200x200px. A flat fractional inset (e.g. "0.1 of a
+ * column") does NOT give both logos the same visual margin, because column A
+ * and the last column are very different widths — especially on the
+ * Third Term layout (A is 60.57 char-units, the last column only 33.29), so
+ * the same 0.1 fraction leaves the government logo with much more breathing
+ * room than the school logo, making the centered text between them look
+ * off-balance even though it IS centered in the underlying grid.
+ *
+ * Instead, LOGO_EDGE_PIXEL_INSET is a fixed ~15px margin from the true left
+ * and right sheet edges, converted to the correct fractional offset for
+ * WHICHEVER column each logo actually sits in — so both sides get the same
+ * real margin regardless of that column's width.
+ */
+const LOGO_SIZE = 200;
+const LOGO_EDGE_PIXEL_INSET = 15;
+
+/** Excel's default-font column-width-to-pixel approximation (~7px/char-unit + 5px padding). */
+function charUnitsToPixels(charUnits) {
+  return charUnits * 7 + 5;
+}
+
+function pixelInsetToColFraction(colWidthCharUnits, pixelInset) {
+  const colWidthPx = charUnitsToPixels(colWidthCharUnits);
+  return Math.min(0.9, pixelInset / colWidthPx);
+}
+
+function placeLogos(sheet, top, colCount, columnWidths, govLogoImageId, schoolLogoImageId) {
+  if (govLogoImageId != null) {
+    const inset = pixelInsetToColFraction(columnWidths[0], LOGO_EDGE_PIXEL_INSET);
+    sheet.addImage(govLogoImageId, {
+      tl: { col: inset, row: top - 1 + 0.05 },
+      ext: { width: LOGO_SIZE, height: LOGO_SIZE },
+    });
+  }
+  if (schoolLogoImageId != null) {
+    const inset = pixelInsetToColFraction(columnWidths[colCount - 1], LOGO_EDGE_PIXEL_INSET);
+    sheet.addImage(schoolLogoImageId, {
+      tl: { col: colCount - 1 + inset, row: top - 1 + 0.05 },
+      ext: { width: LOGO_SIZE, height: LOGO_SIZE },
+    });
+  }
 }
 
 // -------------------------------------------------------------------------
 // SINGLE TERM layout (First / Second Term) — columns A..K (1..11)
 // -------------------------------------------------------------------------
-function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectScores, logoImageId) {
+function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectScores, govLogoImageId, schoolLogoImageId) {
   const r = (offset) => top + offset; // offset 0 == the block's row 1 (school name)
 
-  placeLogo(sheet, logoImageId, r(0));
+  placeLogos(sheet, r(0), 11, COLUMN_WIDTHS_SINGLE, govLogoImageId, schoolLogoImageId);
 
-  merge(sheet, r(0), 1, r(0), 11);
-  cell(sheet, r(0), 1, school.name, { bold: true, align: "center", size: 22, color: NAVY });
+  // Match the real template's row heights for this entire 60-row block so
+  // text at the template's actual font sizes isn't clipped or squished.
+  applyBlockRowHeights(sheet, top, ROW_HEIGHTS_SINGLE);
+
+  mergeStyled(sheet, r(0), 1, r(0), 11, { align: "center" });
+  cell(sheet, r(0), 1, (school.name || "").trim(), { bold: true, align: "center", size: 65, color: NAVY });
   merge(sheet, r(1), 1, r(1), 11);
-  cell(sheet, r(1), 1, school.address, { align: "center", size: 11, bold: true, color: LIGHT_BLUE });
-  merge(sheet, r(2), 1, r(2), 11);
-  cell(sheet, r(2), 1, school.ministry, { bold: true, align: "center", size: 15, color: NAVY });
+  cell(sheet, r(1), 1, (school.address || "").trim(), { align: "center", size: 18, bold: true, color: LIGHT_BLUE });
+  mergeStyled(sheet, r(2), 1, r(2), 11, { align: "center" });
+  cell(sheet, r(2), 1, (school.ministry || "").trim(), { bold: true, align: "center", size: 30, color: NAVY });
+  sheet.getRow(r(2)).getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   merge(sheet, r(3), 1, r(3), 11);
-  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 13, color: LIGHT_BLUE });
+  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
 
-  const LBL = { bold: true, size: 11, color: BLUE };
-  const VAL = { bold: true, size: 11, color: BLACK };
+  const LBL = { bold: true, size: 26, color: BLUE, wrap: false };
+  const VAL = { bold: true, size: 26, color: BLACK, wrap: false };
 
   cell(sheet, r(5), 1, "Name of Student: ", LBL);
   merge(sheet, r(5), 2, r(5), 6);
@@ -162,9 +271,10 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(9), 6, "Fees Owed:", LBL);
   merge(sheet, r(9), 8, r(9), 11);
 
-  bandHeader(sheet, r(12), 2, r(12), 11, "ACADEMIC RECORDS", { size: 13 });
+  bandHeader(sheet, r(12), 2, r(12), 11, "ACADEMIC RECORDS", { size: 28, border: true });
 
-  const THEAD = { bold: true, align: "center", size: 11, color: NAVY };
+  const THEAD = { bold: true, align: "center", size: 24, color: NAVY, border: true };
+  const w = classInfo.weights || {};
   merge(sheet, r(13), 2, r(13), 5);
   cell(sheet, r(13), 2, "ASSIGNMENTS/TEST", THEAD);
   cell(sheet, r(13), 6, "EXAM", THEAD);
@@ -184,19 +294,19 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(14), 6, "Marks", THEAD);
 
   merge(sheet, r(15), 2, r(16), 2);
-  cell(sheet, r(15), 2, 0.1, THEAD);
+  cell(sheet, r(15), 2, w.ca1 ?? 0.1, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(15), 3, r(16), 3);
-  cell(sheet, r(15), 3, 0.1, THEAD);
+  cell(sheet, r(15), 3, w.ca2 ?? 0.1, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(15), 4, r(16), 4);
-  cell(sheet, r(15), 4, 0.2, THEAD);
+  cell(sheet, r(15), 4, w.test1 ?? 0.2, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(15), 5, r(16), 5);
-  cell(sheet, r(15), 5, 0.2, THEAD);
+  cell(sheet, r(15), 5, w.test2 ?? 0.2, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(15), 6, r(16), 6);
-  cell(sheet, r(15), 6, 0.4, THEAD);
+  cell(sheet, r(15), 6, w.exam ?? 0.4, { ...THEAD, numFmt: "0%" });
   cell(sheet, r(15), 7, "Scores", THEAD);
 
-  bandHeader(sheet, r(16), 1, r(16), 1, "CORE SUBJECTS", { align: "left", size: 11 });
-  cell(sheet, r(16), 7, 1, THEAD);
+  bandHeader(sheet, r(16), 1, r(16), 1, "CORE SUBJECTS", { align: "left", size: 24, border: true });
+  cell(sheet, r(16), 7, 1, { ...THEAD, numFmt: "0%" });
   cell(sheet, r(16), 8, "Average", THEAD);
   cell(sheet, r(16), 9, "Position", THEAD);
   cell(sheet, r(16), 10, "Grade", THEAD);
@@ -205,80 +315,88 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   classInfo.subjects.forEach((subject, i) => {
     const row = r(17 + i);
     const s = subjectScores?.[subject.id] || {};
-    cell(sheet, row, 1, subject.name, { bold: true, size: 10, color: NAVY });
-    cell(sheet, row, 2, s.ca1 ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 3, s.ca2 ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 4, s.test1 ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 5, s.test2 ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 6, s.exam ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 7, s.total ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 8, s.classAvg ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 9, s.position ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 10, s.grade ?? "", { border: true, align: "center", size: 11, bold: true });
-    cell(sheet, row, 11, s.remark ?? "", { size: 11, bold: true });
+    cell(sheet, row, 1, subject.name, { bold: true, size: 22, color: NAVY, border: true });
+    cell(sheet, row, 2, s.ca1 ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 3, s.ca2 ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 4, s.test1 ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 5, s.test2 ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 6, s.exam ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 7, s.total ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 8, s.classAvg ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 9, s.position ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 10, s.grade ?? "", { border: true, align: "center", size: 26, bold: true });
+    cell(sheet, row, 11, s.remark ?? "", { size: 26, bold: true, border: true });
     total += Number(s.total || 0);
   });
 
   const totalRow = r(37);
   const average = classInfo.subjects.length ? total / classInfo.subjects.length : 0;
-  cell(sheet, totalRow, 1, "TOTAL =", { bold: true, size: 13 });
-  cell(sheet, totalRow, 2, Math.round(total * 100) / 100, { bold: true, size: 13 });
+  cell(sheet, totalRow, 1, "TOTAL =", { bold: true, size: 28 });
+  cell(sheet, totalRow, 2, Math.round(total * 100) / 100, { bold: true, size: 28 });
   merge(sheet, totalRow, 6, r(38), 7);
-  cell(sheet, totalRow, 6, "AVERAGE:", { bold: true, align: "center", size: 13 });
-  cell(sheet, totalRow, 11, Math.round(average * 100) / 100, { bold: true, align: "center", size: 13 });
-  cell(sheet, r(38), 8, classInfo.subjects.length, { align: "center", bold: true, size: 13 });
+  cell(sheet, totalRow, 6, "AVERAGE:", { bold: true, align: "center", size: 28 });
+  cell(sheet, totalRow, 11, Math.round(average * 100) / 100, { bold: true, align: "center", size: 28 });
+  cell(sheet, r(38), 8, classInfo.subjects.length, { align: "center", bold: true, size: 28 });
 
-  bandHeader(sheet, r(40), 4, r(40), 8, "Ratings", { size: 11 });
+  bandHeader(sheet, r(40), 4, r(40), 8, "Ratings", { size: 20, border: true });
   merge(sheet, r(41), 1, r(41), 3);
-  cell(sheet, r(41), 1, "BEHAVIOUR AND ACTIVITIES", { bold: true, size: 11, color: BLUE });
-  BAND_LETTERS.forEach((band, i) => cell(sheet, r(41), 4 + i, band, { bold: true, align: "center", size: 11, color: BLUE }));
-  cell(sheet, r(41), 10, "KEY TO RATING", { bold: true, size: 11, color: NAVY });
+  cell(sheet, r(41), 1, "BEHAVIOUR AND ACTIVITIES", { bold: true, size: 22, color: BLUE, border: true });
+  BAND_LETTERS.forEach((band, i) => cell(sheet, r(41), 4 + i, band, { bold: true, align: "center", size: 20, color: BLUE, border: true }));
+  bandHeader(sheet, r(41), 9, r(41), 11, "KEY TO RATING", { size: 20, border: true });
 
   const RATING_KEY = ["A = Excellent", "B = V.Good", "C = Good", "D = Pass", "E = Fair", "F = Fail"];
   (student.behaviourCriteria || DEFAULT_BEHAVIOUR_CRITERIA).forEach((criterion, i) => {
     const row = r(42 + i);
     merge(sheet, row, 1, row, 3);
-    cell(sheet, row, 1, criterion, { size: 11, color: BLUE });
+    cell(sheet, row, 1, criterion, { size: 22, color: BLUE, border: true });
     const band = student.behaviour?.[criterion];
     const bandIdx = BAND_LETTERS.indexOf(band);
-    if (bandIdx >= 0) cell(sheet, row, 4 + bandIdx, "\u00fc", { align: "center", fontName: "Wingdings", size: 18, color: BLUE });
-    if (RATING_KEY[i]) cell(sheet, row, 10, RATING_KEY[i], { bold: true, size: 10, color: NAVY });
+    BAND_LETTERS.forEach((_, bi) => cell(sheet, row, 4 + bi, bi === bandIdx ? "\u00fc" : "", { align: "center", fontName: "Wingdings", size: 36, color: BLUE, border: true }));
+    if (RATING_KEY[i]) {
+      merge(sheet, row, 9, row, 11);
+      cell(sheet, row, 9, RATING_KEY[i], { bold: true, size: 18, color: NAVY, border: true, align: "left" });
+    }
   });
 
-  cell(sheet, r(55), 1, "Form Master's Remark: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(55), 1, "Form Master's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(55), 3, r(55), 10);
-  cell(sheet, r(55), 3, student.formMasterRemark || "", { bold: true, size: 11 });
-  cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(55), 3, student.formMasterRemark || "", { bold: true, size: 24, align: "left", wrap: false });
+  cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 3, r(56), 8);
-  cell(sheet, r(56), 3, student.signatureDate || "", { bold: true, size: 10, color: NAVY, align: "center" });
+  cell(sheet, r(56), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
 
-  cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(58), 3, r(58), 10);
-  cell(sheet, r(58), 3, student.principalRemark || "", { bold: true, size: 11 });
-  cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(58), 3, student.principalRemark || "", { bold: true, size: 24, align: "left", wrap: false });
+  cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 3, r(59), 8);
-  cell(sheet, r(59), 3, student.signatureDate || "", { bold: true, size: 10, color: NAVY, align: "center" });
+  cell(sheet, r(59), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
 }
 
 // -------------------------------------------------------------------------
 // THIRD TERM layout — columns A..N (1..14), adds Previous/Annual columns
 // -------------------------------------------------------------------------
-function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScores, cumulative, logoImageId) {
+function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScores, cumulative, govLogoImageId, schoolLogoImageId) {
   const r = (offset) => top + offset;
 
-  placeLogo(sheet, logoImageId, r(0));
+  placeLogos(sheet, r(0), 14, COLUMN_WIDTHS_THIRD, govLogoImageId, schoolLogoImageId);
 
-  merge(sheet, r(0), 1, r(0), 14);
-  cell(sheet, r(0), 1, school.name, { bold: true, align: "center", size: 22, color: NAVY });
+  // Match the real template's row heights for this entire 60-row block so
+  // text at the template's actual font sizes isn't clipped or squished.
+  applyBlockRowHeights(sheet, top, ROW_HEIGHTS_THIRD);
+
+  mergeStyled(sheet, r(0), 1, r(0), 14, { align: "center" });
+  cell(sheet, r(0), 1, (school.name || "").trim(), { bold: true, align: "center", size: 65, color: NAVY });
   merge(sheet, r(1), 1, r(1), 14);
-  cell(sheet, r(1), 1, school.address, { align: "center", size: 10, bold: true, color: LIGHT_BLUE });
-  merge(sheet, r(2), 1, r(2), 14);
-  cell(sheet, r(2), 1, school.ministry, { bold: true, align: "center", size: 15, color: NAVY });
+  cell(sheet, r(1), 1, (school.address || "").trim(), { align: "center", size: 20, bold: true, color: LIGHT_BLUE });
+  mergeStyled(sheet, r(2), 1, r(2), 14, { align: "center" });
+  cell(sheet, r(2), 1, (school.ministry || "").trim(), { bold: true, align: "center", size: 30, color: NAVY });
+  sheet.getRow(r(2)).getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   merge(sheet, r(3), 1, r(3), 14);
-  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 13, color: LIGHT_BLUE });
+  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
 
-  const LBL = { bold: true, size: 11, color: BLUE };
-  const VAL = { bold: true, size: 11, color: BLACK };
+  const LBL = { bold: true, size: 26, color: BLUE, wrap: false };
+  const VAL = { bold: true, size: 26, color: BLACK, wrap: false };
 
   merge(sheet, r(5), 1, r(5), 2);
   cell(sheet, r(5), 1, "Name of Student: ", LBL);
@@ -327,9 +445,10 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(9), 8, "Fees Owed:", LBL);
   merge(sheet, r(9), 10, r(9), 14);
 
-  bandHeader(sheet, r(11), 4, r(11), 14, "ACADEMIC RECORDS", { size: 13 });
+  bandHeader(sheet, r(11), 4, r(11), 14, "ACADEMIC RECORDS", { size: 28, border: true });
 
-  const THEAD = { bold: true, align: "center", size: 11, color: NAVY };
+  const THEAD = { bold: true, align: "center", size: 24, color: NAVY, border: true };
+  const w = classInfo.weights || {};
   merge(sheet, r(12), 4, r(12), 7);
   cell(sheet, r(12), 4, "ASSIGNMENTS/TEST", THEAD);
   cell(sheet, r(12), 8, "EXAM", THEAD);
@@ -351,23 +470,23 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(13), 8, "Marks", THEAD);
 
   merge(sheet, r(14), 2, r(14), 3);
-  cell(sheet, r(14), 2, "Previous", { fill: NAVY, color: WHITE, bold: true, align: "center", size: 11 });
+  cell(sheet, r(14), 2, "Previous", { fill: NAVY, color: WHITE, bold: true, align: "center", size: 24, border: true });
   merge(sheet, r(14), 4, r(15), 4);
-  cell(sheet, r(14), 4, 0.1, THEAD);
+  cell(sheet, r(14), 4, w.ca1 ?? 0.1, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(14), 5, r(15), 5);
-  cell(sheet, r(14), 5, 0.1, THEAD);
+  cell(sheet, r(14), 5, w.ca2 ?? 0.1, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(14), 6, r(15), 6);
-  cell(sheet, r(14), 6, 0.2, THEAD);
+  cell(sheet, r(14), 6, w.test1 ?? 0.2, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(14), 7, r(15), 7);
-  cell(sheet, r(14), 7, 0.2, THEAD);
+  cell(sheet, r(14), 7, w.test2 ?? 0.2, { ...THEAD, numFmt: "0%" });
   merge(sheet, r(14), 8, r(15), 8);
-  cell(sheet, r(14), 8, 0.4, THEAD);
+  cell(sheet, r(14), 8, w.exam ?? 0.4, { ...THEAD, numFmt: "0%" });
   cell(sheet, r(14), 9, "Scores", THEAD);
 
-  bandHeader(sheet, r(15), 1, r(15), 1, "CORE SUBJECTS", { align: "left", size: 11 });
+  bandHeader(sheet, r(15), 1, r(15), 1, "CORE SUBJECTS", { align: "left", size: 24, border: true });
   merge(sheet, r(15), 2, r(15), 3);
-  cell(sheet, r(15), 2, "Summary", { fill: NAVY, color: WHITE, bold: true, align: "center", size: 10 });
-  cell(sheet, r(15), 9, 1, THEAD);
+  cell(sheet, r(15), 2, "Summary", { fill: NAVY, color: WHITE, bold: true, align: "center", size: 22, border: true });
+  cell(sheet, r(15), 9, 1, { ...THEAD, numFmt: "0%" });
   cell(sheet, r(15), 10, "Average", THEAD);
   cell(sheet, r(15), 11, "Position", THEAD);
   cell(sheet, r(15), 12, "Total", THEAD);
@@ -381,88 +500,116 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
     const prev1 = cumulative?.[subject.id]?.term1 ?? "";
     const prev2 = cumulative?.[subject.id]?.term2 ?? "";
     const annual = [prev1, prev2, s.total].filter((v) => v !== "" && v != null).reduce((a, b) => a + Number(b), 0);
-    cell(sheet, row, 1, subject.name, { bold: true, size: 10, color: NAVY });
-    cell(sheet, row, 2, prev1, { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 3, prev2, { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 4, s.ca1 ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 5, s.ca2 ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 6, s.test1 ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 7, s.test2 ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 8, s.exam ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 9, s.total ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 10, s.classAvg ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 11, s.position ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 12, annual, { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 13, s.grade ?? "", { border: true, align: "center", bold: true, size: 11 });
-    cell(sheet, row, 14, s.remark ?? "", { bold: true, size: 11 });
+    cell(sheet, row, 1, subject.name, { bold: true, size: 22, color: NAVY, border: true });
+    cell(sheet, row, 2, prev1, { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 3, prev2, { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 4, s.ca1 ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 5, s.ca2 ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 6, s.test1 ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 7, s.test2 ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 8, s.exam ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 9, s.total ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 10, s.classAvg ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 11, s.position ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 12, annual, { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 13, s.grade ?? "", { border: true, align: "center", bold: true, size: 26 });
+    cell(sheet, row, 14, s.remark ?? "", { bold: true, size: 26, border: true });
     total += Number(s.total || 0);
     annualTotalSum += annual;
   });
 
   const totalRow = r(36);
   const average = classInfo.subjects.length ? total / classInfo.subjects.length : 0;
-  cell(sheet, totalRow, 1, "TOTAL", { bold: true, size: 13 });
+  cell(sheet, totalRow, 1, "TOTAL", { bold: true, size: 28 });
   merge(sheet, totalRow, 8, r(37), 9);
-  cell(sheet, totalRow, 8, "AVERAGE:", { bold: true, align: "center", size: 13 });
+  cell(sheet, totalRow, 8, "AVERAGE:", { bold: true, align: "center", size: 28 });
   merge(sheet, totalRow, 10, totalRow, 11);
-  cell(sheet, totalRow, 10, Math.round(total * 100) / 100, { bold: true, align: "center", size: 13 });
+  cell(sheet, totalRow, 10, Math.round(total * 100) / 100, { bold: true, align: "center", size: 28 });
   merge(sheet, totalRow, 13, r(37), 13);
-  cell(sheet, totalRow, 13, "=", { align: "center", size: 13 });
+  cell(sheet, totalRow, 13, "=", { align: "center", size: 28 });
   merge(sheet, totalRow, 14, r(37), 14);
-  cell(sheet, totalRow, 14, Math.round(average * 100) / 100, { bold: true, align: "center", size: 13 });
+  cell(sheet, totalRow, 14, Math.round(average * 100) / 100, { bold: true, align: "center", size: 28 });
   merge(sheet, r(37), 10, r(37), 11);
-  cell(sheet, r(37), 10, classInfo.subjects.length, { align: "center", bold: true, size: 13 });
+  cell(sheet, r(37), 10, classInfo.subjects.length, { align: "center", bold: true, size: 28 });
 
-  bandHeader(sheet, r(39), 3, r(39), 7, "Ratings", { size: 11 });
-  bandHeader(sheet, r(39), 9, r(39), 14, "ANNUAL SUMMARY", { size: 12 });
+  bandHeader(sheet, r(39), 3, r(39), 7, "Ratings", { size: 24, border: true });
+  bandHeader(sheet, r(39), 9, r(39), 14, "ANNUAL SUMMARY", { size: 26, border: true });
 
   merge(sheet, r(40), 1, r(40), 2);
-  cell(sheet, r(40), 1, "BEHAVIOUR AND ACTIVITIES", { bold: true, size: 10, color: BLUE });
-  BAND_LETTERS.forEach((band, i) => cell(sheet, r(40), 3 + i, band, { bold: true, align: "center", size: 11, color: BLUE }));
+  cell(sheet, r(40), 1, "BEHAVIOUR AND ACTIVITIES", { bold: true, size: 20, color: BLUE, border: true });
+  BAND_LETTERS.forEach((band, i) => cell(sheet, r(40), 3 + i, band, { bold: true, align: "center", size: 20, color: BLUE, border: true }));
   merge(sheet, r(40), 9, r(41), 10);
-  cell(sheet, r(40), 9, "ANNUAL TOTAL = ", { bold: true, size: 12, color: NAVY });
+  cell(sheet, r(40), 9, "ANNUAL TOTAL = ", { bold: true, size: 26, color: NAVY, border: true });
   merge(sheet, r(40), 11, r(41), 14);
-  cell(sheet, r(40), 11, annualTotalSum || student.annualTotal || "", { align: "center", bold: true, size: 16, color: NAVY });
+  cell(sheet, r(40), 11, annualTotalSum || student.annualTotal || "", { align: "center", bold: true, size: 36, color: NAVY, border: true });
 
   (student.behaviourCriteria || DEFAULT_BEHAVIOUR_CRITERIA).forEach((criterion, i) => {
     const row = r(41 + i);
     merge(sheet, row, 1, row, 2);
-    cell(sheet, row, 1, criterion, { size: 11, color: BLUE });
+    cell(sheet, row, 1, criterion, { size: 22, color: BLUE, border: true });
     const band = student.behaviour?.[criterion];
     const bandIdx = BAND_LETTERS.indexOf(band);
-    if (bandIdx >= 0) cell(sheet, row, 3 + bandIdx, "\u00fc", { align: "center", fontName: "Wingdings", size: 18, color: BLUE });
+    BAND_LETTERS.forEach((_, bi) => cell(sheet, row, 3 + bi, bi === bandIdx ? "\u00fc" : "", { align: "center", fontName: "Wingdings", size: 36, color: BLUE, border: true }));
   });
 
   merge(sheet, r(42), 9, r(44), 10);
-  cell(sheet, r(42), 9, "ANNUAL AVERAGE = ", { bold: true, size: 10, color: NAVY });
-  merge(sheet, r(42), 11, r(43), 11);
-  const annualAverage = classInfo.subjects.length ? annualTotalSum / classInfo.subjects.length : 0;
-  cell(sheet, r(42), 11, Math.round(annualAverage * 100) / 100, { align: "center", bold: true, size: 16, color: NAVY });
+  cell(sheet, r(42), 9, "ANNUAL AVERAGE = ", { bold: true, size: 22, color: NAVY, border: true });
+  // Shown as an actual fraction — annual total over (subjects × 3 terms),
+  // then "=" then the result — matching how the school's real template
+  // displays it. This also fixes the underlying math: annualTotalSum is
+  // each subject's First+Second+Third total added up across the whole
+  // class, so it's ~3x a single term's total; dividing by subjects.length
+  // alone (the old code) overstated the average roughly 3-fold. Dividing by
+  // subjects × terms-per-session brings it back to a normal 0–100 scale.
+  const TERMS_PER_SESSION = 3;
+  const annualAverageDenominator = classInfo.subjects.length * TERMS_PER_SESSION;
+  const annualAverage = annualAverageDenominator ? annualTotalSum / annualAverageDenominator : 0;
+  cell(sheet, r(42), 11, annualTotalSum, { align: "center", bold: true, size: 24, color: NAVY, border: true });
+  cell(sheet, r(44), 11, annualAverageDenominator, { align: "center", bold: true, size: 24, color: NAVY, border: true });
+  merge(sheet, r(42), 12, r(44), 12);
+  cell(sheet, r(42), 12, "=", { align: "center", size: 26, color: NAVY, border: true });
+  merge(sheet, r(42), 13, r(44), 14);
+  cell(sheet, r(42), 13, Math.round(annualAverage * 100) / 100, { align: "center", bold: true, size: 36, color: NAVY, border: true });
 
   merge(sheet, r(45), 9, r(46), 11);
-  cell(sheet, r(45), 9, "CUMMULATIVE POSITION:", { bold: true, size: 11, color: NAVY });
+  cell(sheet, r(45), 9, "CUMMULATIVE POSITION:", { bold: true, size: 26, color: NAVY, border: true });
   merge(sheet, r(45), 12, r(46), 14);
-  cell(sheet, r(45), 12, student.cumulativePosition ?? "", { align: "center", bold: true, size: 13, color: NAVY });
+  cell(sheet, r(45), 12, student.cumulativePosition ?? "", { align: "center", bold: true, size: 28, color: NAVY, border: true });
 
-  cell(sheet, r(47), 9, `COMMENT: ${student.promotionComment || ""}`, { bold: true, size: 13, color: NAVY });
-  merge(sheet, r(50), 13, r(56), 13);
-  cell(sheet, r(50), 13, "KEY TO RATING", { bold: true, fill: NAVY, color: WHITE, align: "center", size: 11 });
+  // Comment box sits in the left ~2/3 of the row (cols 9-12), KEY TO RATING
+  // takes the right column pair (13-14) beside it — same footprint as the
+  // reference layout, and critically the two no longer share column 13, so
+  // nothing here collides with the signature block below.
+  merge(sheet, r(47), 9, r(47), 10);
+  cell(sheet, r(47), 9, "COMMENT:", { bold: true, size: 22, color: NAVY, border: true });
+  merge(sheet, r(47), 11, r(47), 12);
+  cell(sheet, r(47), 11, student.promotionComment || "", { bold: true, size: 24, color: NAVY, align: "left", border: true });
+
+  bandHeader(sheet, r(47), 13, r(47), 14, "KEY TO RATING", { size: 18, border: true });
   const RATING_KEY = ["A = Excellent", "B = V.Good", "C = Good", "D = Pass", "E = Fair", "F = Fail"];
-  RATING_KEY.forEach((line, i) => cell(sheet, r(51 + i), 13, line, { bold: true, size: 10, color: NAVY }));
+  RATING_KEY.forEach((line, i) => {
+    const row = r(48 + i);
+    merge(sheet, row, 13, row, 14);
+    cell(sheet, row, 13, line, { bold: true, size: 16, color: NAVY, border: true });
+  });
 
-  cell(sheet, r(55), 1, "Form Master's Remark: ", { bold: true, size: 11, color: BLUE });
+  merge(sheet, r(55), 1, r(55), 2);
+  cell(sheet, r(55), 1, "Form Master's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(55), 5, r(55), 13);
-  cell(sheet, r(55), 5, student.formMasterRemark || "", { bold: true, size: 11 });
-  cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(55), 5, student.formMasterRemark || "", { bold: true, size: 24, align: "left", wrap: false });
+  merge(sheet, r(56), 1, r(56), 2);
+  cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 9, r(56), 11);
-  cell(sheet, r(56), 9, student.signatureDate || "", { bold: true, size: 10, color: NAVY, align: "center" });
+  cell(sheet, r(56), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
 
-  cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 11, color: BLUE });
+  merge(sheet, r(58), 1, r(58), 2);
+  cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(58), 5, r(58), 13);
-  cell(sheet, r(58), 5, student.principalRemark || "", { bold: true, size: 11 });
-  cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 11, color: BLUE });
+  cell(sheet, r(58), 5, student.principalRemark || "", { bold: true, size: 24, align: "left", wrap: false });
+  merge(sheet, r(59), 1, r(59), 2);
+  cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 9, r(59), 11);
-  cell(sheet, r(59), 9, student.signatureDate || "", { bold: true, size: 10, color: NAVY, align: "center" });
+  cell(sheet, r(59), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
 }
 
 // -------------------------------------------------------------------------
@@ -470,9 +617,10 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
 // -------------------------------------------------------------------------
 
 /**
- * @param {Object} school     { name, address, ministry, logoUrl }
+ * @param {Object} school     { name, address, ministry, logoUrl, govLogoUrl }
  * @param {Object} classInfo  { className, level, stream, session, term, noInClass,
- *                               termEndingDate, nextTermBegins, subjects: [{id,name}] }
+ *                               termEndingDate, nextTermBegins, subjects: [{id,name}],
+ *                               weights: {ca1,ca2,test1,test2,exam} }
  * @param {Array}  students   [{ id, fullName, examNo, sex, stateOfOrigin, lga,
  *                               scores: {subjectId: {ca1,ca2,test1,test2,exam,total,
  *                                                     classAvg,position,grade,remark}},
@@ -489,25 +637,35 @@ export async function exportClassResults(school, classInfo, students, options = 
   const sheet = wb.addWorksheet(classInfo.term || "Result");
   const isThirdTerm = !!options.isThirdTerm;
   const colCount = isThirdTerm ? 14 : 11;
-  for (let i = 1; i <= colCount; i++) sheet.getColumn(i).width = 11;
-  sheet.getColumn(1).width = 22;
+  // Fixed widths lifted straight from the real template — NOT autosized —
+  // so every export lines up with the printed report regardless of how
+  // long any particular student's data happens to be.
+  const columnWidths = isThirdTerm ? COLUMN_WIDTHS_THIRD : COLUMN_WIDTHS_SINGLE;
+  for (let i = 1; i <= colCount; i++) sheet.getColumn(i).width = columnWidths[i - 1];
 
-  // Logo is fetched once and re-used (by ExcelJS image id) across every
-  // student block, rather than re-downloaded per student.
-  const logoImageId = await registerLogo(wb, school.logoUrl);
+  // Both logos are fetched once and re-used (by ExcelJS image id) across
+  // every student block, rather than re-downloaded per student. The Federal
+  // Government logo sits top-left, the school's own logo top-right.
+  const [govLogoImageId, schoolLogoImageId] = await Promise.all([
+    registerLogo(wb, school.govLogoUrl),
+    registerLogo(wb, school.logoUrl),
+  ]);
 
   // --- Print / page setup: one student block per A4 page ---------------
-  // fitToWidth:1 scales each page's columns to fit a single A4 sheet width;
-  // fitToHeight:0 leaves height unconstrained (each block is a fixed 60-row
-  // height, so it naturally fills close to one page). Manual row breaks
-  // after every block guarantee the next student always starts on a fresh
-  // page, regardless of Excel's automatic pagination.
+  // fitToWidth:1 scales columns to fit a single A4 sheet width. Each
+  // student's 60-row block (with the template's real row heights applied)
+  // is taller than one printable page at 100% scale, so fitToHeight must be
+  // set to the actual page count (one per student) rather than left
+  // unconstrained (0) — otherwise Excel auto-breaks each block across two
+  // physical pages, orphaning the remarks/signature rows onto their own
+  // page. Manual row breaks after every block still guarantee each student
+  // starts on a fresh page.
   sheet.pageSetup = {
     paperSize: 9, // A4
     orientation: isThirdTerm ? "landscape" : "portrait",
     fitToPage: true,
     fitToWidth: 1,
-    fitToHeight: 0,
+    fitToHeight: students.length,
     horizontalCentered: true,
     margins: {
       left: 0.35,
@@ -523,9 +681,9 @@ export async function exportClassResults(school, classInfo, students, options = 
   let top = 1;
   students.forEach((student, i) => {
     if (isThirdTerm) {
-      writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], logoImageId);
+      writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], govLogoImageId, schoolLogoImageId);
     } else {
-      writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores, logoImageId);
+      writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores, govLogoImageId, schoolLogoImageId);
     }
     const isLastStudent = i === students.length - 1;
     if (!isLastStudent) {
@@ -553,16 +711,26 @@ export function downloadWorkbook(buffer, filename) {
 }
 
 // ---------------------------------------------------------------------------
-// Provenance: the row/column map AND the visual design (fonts, sizes, colors,
-// header fills) above were reverse-engineered from a real filled report
-// (Gaskiya High School, "third_term.xlsx" First Term + Third Term sheets, and
-// "JSS2_..._first_term_and_second_term.xlsx") using openpyxl to inspect
-// ws.merged_cells.ranges, cell fonts/fills, and ws.iter_rows(). Everything
-// uses Tahoma; labels are FF0070C0 (mid blue), key figures/headings are
-// FF002060 (navy), the sub-headline banners are FF00B0F0 (light blue), and
-// section bands ("ACADEMIC RECORDS", "CORE SUBJECTS", "Ratings", "KEY TO
-// RATING", "ANNUAL SUMMARY") are white-on-navy fills. If the school changes
-// their template later, re-run that inspection on a fresh sample and update
-// the two writeXBlock() functions — nothing else in the app depends on this
-// file's internals.
+// Provenance: the row/column map, the visual design (fonts, sizes, colors,
+// header fills), AND the row heights / column widths above were measured
+// directly from a real filled report (Gaskiya High School, "third_term.xlsx"
+// First Term + Third Term sheets, and "JSS2_..._first_term_and_second_term.xlsx")
+// using openpyxl to inspect ws.merged_cells.ranges, cell fonts/fills,
+// ws.row_dimensions, ws.column_dimensions, and ws.iter_rows(). Everything
+// uses Tahoma; labels/values run 18-26pt, table headers 20-28pt, subject
+// data cells 26pt, and the school name/ministry banners 45-65pt — these are
+// intentionally huge because the template itself uses them, and the
+// ROW_HEIGHTS_SINGLE / ROW_HEIGHTS_THIRD arrays exist specifically so those
+// large fonts have room to render without clipping. Labels are FF0070C0
+// (mid blue), key figures/headings are FF002060 (navy), the sub-headline
+// banners are FF00B0F0 (light blue), and section bands ("ACADEMIC RECORDS",
+// "CORE SUBJECTS", "Ratings", "KEY TO RATING", "ANNUAL SUMMARY") are
+// white-on-navy fills. Column widths are fixed (COLUMN_WIDTHS_SINGLE /
+// COLUMN_WIDTHS_THIRD) rather than autosized, so exports always line up
+// with the printed template regardless of how long any given student's data
+// is. If the school changes their template later, re-run that inspection on
+// a fresh sample (row_dimensions/column_dimensions + per-cell font sizes)
+// and update the two writeXBlock() functions and the four lookup tables at
+// the top of this file — nothing else in the app depends on this file's
+// internals.
 // ---------------------------------------------------------------------------

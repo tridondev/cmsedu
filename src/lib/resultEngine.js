@@ -4,11 +4,36 @@
 // and reused both client-side (live preview) and inside a Cloud Function
 // (authoritative recompute on every score write).
 
-/** Weight splits taken directly from the uploaded templates. */
+/**
+ * Weight splits taken directly from the uploaded templates. These are the
+ * fallback/default values — a school admin can override them per grading
+ * scale from Settings (stored at schools/{id}.weights.{JSS|SS}), and every
+ * caller in the app should prefer that stored value over this constant when
+ * it's present. Keeping the shape identical ({ca1,ca2,test1,test2,exam},
+ * fractions summing to 1) means nothing else needs to change when it's
+ * overridden.
+ */
 export const WEIGHTS = {
   JSS: { ca1: 0.1, ca2: 0.1, test1: 0.2, test2: 0.2, exam: 0.4 },
   SS: { ca1: 0.05, ca2: 0.05, test1: 0.1, test2: 0.1, exam: 0.7 },
 };
+
+/** Which grading scale a class level falls under. */
+export function gradingScaleFor(level) {
+  return level && level.startsWith("SS") ? "SS" : "JSS";
+}
+
+/**
+ * Returns the effective weights for a scale: the school's custom weights if
+ * they've set them in Settings, otherwise the built-in defaults above.
+ * `schoolWeights` is the raw `school.weights` field from Firestore, shaped
+ * `{ JSS: {ca1,ca2,test1,test2,exam}, SS: {...} }` (either half optional).
+ */
+export function effectiveWeights(gradingScale, schoolWeights) {
+  const custom = schoolWeights?.[gradingScale];
+  if (custom && Object.keys(custom).length === 5) return custom;
+  return WEIGHTS[gradingScale];
+}
 
 /**
  * Raw scores are entered by teachers as "out of" the component's max
@@ -16,9 +41,12 @@ export const WEIGHTS = {
  * header row (0.1, 0.1, 0.2, 0.2, 0.4 style caps for JSS, 5/5/10/10/70 for SS).
  * We normalise to a percentage of the component, then apply the weight,
  * so the same function works whatever the component's raw max is.
+ *
+ * @param {Object} customWeights  Optional override, e.g. from
+ *   effectiveWeights() above. Falls back to the built-in WEIGHTS[gradingScale].
  */
-export function computeSubjectTotal(rawScores, gradingScale, componentMax) {
-  const w = WEIGHTS[gradingScale];
+export function computeSubjectTotal(rawScores, gradingScale, componentMax, customWeights) {
+  const w = customWeights || WEIGHTS[gradingScale];
   const max = componentMax || defaultComponentMax(gradingScale);
   let total = 0;
   for (const key of Object.keys(w)) {
@@ -193,6 +221,27 @@ export function computeClassPositions(studentsScores, subjectIds) {
     };
   });
   return perStudent;
+}
+
+/**
+ * Per-subject class average — the "Class Average" column on the report card
+ * (same figure repeated for every student in the class, for a given
+ * subject: the mean of everyone's total in that subject).
+ *
+ * studentsScores shape: { [studentId]: { [subjectId]: totalScore } }
+ * Returns: { [subjectId]: averageRoundedTo2dp }
+ */
+export function computeSubjectClassAverages(studentsScores, subjectIds) {
+  const averages = {};
+  for (const subjectId of subjectIds) {
+    const values = Object.values(studentsScores)
+      .map((subs) => subs[subjectId])
+      .filter((v) => v != null && v !== "");
+    averages[subjectId] = values.length
+      ? Math.round((values.reduce((a, b) => a + Number(b), 0) / values.length) * 100) / 100
+      : "";
+  }
+  return averages;
 }
 
 /**

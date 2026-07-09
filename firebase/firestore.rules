@@ -87,6 +87,13 @@ service cloud.firestore {
         allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId);
         allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
       }
+
+      // Lightweight archive of past academic sessions, written when the
+      // admin starts a new one from Settings (see Settings.jsx).
+      match /sessions/{sessionId} {
+        allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+        allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId);
+      }
     }
   }
 }

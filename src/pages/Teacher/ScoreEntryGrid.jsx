@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore";
 import { db } from "../../firebase/config";
-import { computeSubjectTotal, gradeFor, computeClassPositions } from "../../lib/resultEngine";
+import { computeSubjectTotal, gradeFor, computeClassPositions, gradingScaleFor, effectiveWeights } from "../../lib/resultEngine";
+
+/** Must match resultKeyFor() in SchoolAdmin/Results.jsx — keeps each academic session's scores separate. */
+function resultKeyFor(session, term, classId) {
+  const s = (session || "session").replace(/[^a-zA-Z0-9]+/g, "-");
+  return `${s}_${term}_${classId}`;
+}
 
 /**
  * Spark-plan note: normally `recomputeClassPositions` (a Cloud Function)
@@ -47,12 +53,14 @@ export default function ScoreEntryGrid({ schoolId }) {
   const [scores, setScores] = useState({});
   const [classInfo, setClassInfo] = useState(null);
   const [term, setTerm] = useState(null);
+  const [session, setSession] = useState(null);
+  const [weights, setWeights] = useState(null);
   const [savedRows, setSavedRows] = useState({}); // studentId -> true once saved this session
   const [loading, setLoading] = useState(true);
 
-  const gradingScale = classInfo?.level?.startsWith("SS") ? "SS" : "JSS";
+  const gradingScale = gradingScaleFor(classInfo?.level);
   const subject = classInfo?.subjects?.find((s) => s.id === subjectId);
-  const resultKey = term && classId ? `${term}_${classId}` : null;
+  const resultKey = term && classId ? resultKeyFor(session, term, classId) : null;
 
   useEffect(() => {
     (async () => {
@@ -62,14 +70,18 @@ export default function ScoreEntryGrid({ schoolId }) {
         getDoc(doc(db, "schools", schoolId, "classes", classId)),
         getDocs(collection(db, "schools", schoolId, "classes", classId, "students")),
       ]);
-      const currentTerm = schoolSnap.exists() ? schoolSnap.data().currentTerm || "First" : "First";
+      const schoolData = schoolSnap.exists() ? schoolSnap.data() : {};
+      const currentTerm = schoolData.currentTerm || "First";
       setTerm(currentTerm);
-      setClassInfo(classSnap.exists() ? classSnap.data() : null);
+      setSession(schoolData.currentSession || "");
+      const classData = classSnap.exists() ? classSnap.data() : null;
+      setClassInfo(classData);
+      setWeights(effectiveWeights(gradingScaleFor(classData?.level), schoolData.weights));
       const studentList = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setStudents(studentList);
 
       // Preload any scores already entered this term for this subject.
-      const key = `${currentTerm}_${classId}`;
+      const key = resultKeyFor(schoolData.currentSession, currentTerm, classId);
       const existing = {};
       await Promise.all(
         studentList.map(async (s) => {
@@ -95,12 +107,13 @@ export default function ScoreEntryGrid({ schoolId }) {
 
   const saveRow = async (studentId) => {
     const raw = scores[studentId] || {};
-    const total = computeSubjectTotal(raw, gradingScale);
-    const { grade } = gradeFor(total, gradingScale);
+    const total = computeSubjectTotal(raw, gradingScale, undefined, weights);
+    const { grade, remark } = gradeFor(total, gradingScale);
     await setDoc(doc(db, "schools", schoolId, "results", resultKey, "scores", `${studentId}_${subjectId}`), {
       ...raw,
       total,
       grade,
+      remark,
       updatedAt: Date.now(),
     });
     await recomputePositionsClientSide(schoolId, resultKey);
@@ -146,7 +159,7 @@ export default function ScoreEntryGrid({ schoolId }) {
           <tbody>
             {students.map((s) => {
               const row = scores[s.id] || {};
-              const total = computeSubjectTotal(row, gradingScale);
+              const total = computeSubjectTotal(row, gradingScale, undefined, weights);
               return (
                 <tr key={s.id}>
                   <td className="font-medium text-slate-800">{s.fullName}</td>
@@ -184,7 +197,7 @@ export default function ScoreEntryGrid({ schoolId }) {
       <div className="sm:hidden flex flex-col gap-3">
         {students.map((s) => {
           const row = scores[s.id] || {};
-          const total = computeSubjectTotal(row, gradingScale);
+          const total = computeSubjectTotal(row, gradingScale, undefined, weights);
           return (
             <div key={s.id} className="row-card">
               <div className="flex items-center justify-between mb-1">

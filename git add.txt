@@ -1,3 +1,7 @@
 git add .
 git commit -m "functionality of code"          
 git push origin main
+
+https://cloudinary.com/users/register_free
+https://cloudinary.com/users/register_free
+firebase deploy --only firestore:rules

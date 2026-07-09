@@ -16,9 +16,12 @@ const WEIGHTS = {
  * header row (0.1, 0.1, 0.2, 0.2, 0.4 style caps for JSS, 5/5/10/10/70 for SS).
  * We normalise to a percentage of the component, then apply the weight,
  * so the same function works whatever the component's raw max is.
+ *
+ * @param {Object} customWeights  Optional override — a school's
+ *   schools/{id}.weights.{JSS|SS}, if the admin has set one in Settings.
  */
-function computeSubjectTotal(rawScores, gradingScale, componentMax) {
-  const w = WEIGHTS[gradingScale];
+function computeSubjectTotal(rawScores, gradingScale, componentMax, customWeights) {
+  const w = customWeights || WEIGHTS[gradingScale];
   const max = componentMax || defaultComponentMax(gradingScale);
   let total = 0;
   for (const key of Object.keys(w)) {

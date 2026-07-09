@@ -1,14 +1,32 @@
 import { useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, setDoc, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase/config";
-import { computeClassPositions, computeCumulativeTerm } from "../../lib/resultEngine";
+import {
+  computeClassPositions,
+  computeCumulativeTerm,
+  computeSubjectClassAverages,
+  gradingScaleFor,
+  effectiveWeights,
+  gradeFor,
+} from "../../lib/resultEngine";
 import { exportClassResults, downloadWorkbook } from "../../lib/exportToExcel";
 import StudentReportModal from "../../components/StudentReportModal";
 
 const TERMS = ["First", "Second", "Third"];
 
-async function fetchTermScores(schoolId, classId, term) {
-  const resultKey = `${term}_${classId}`;
+/**
+ * Result docs are scoped per academic session so that starting a new
+ * session (see Settings.jsx) never overwrites a prior session's scores —
+ * without the session in the key, the same "{term}_{classId}" doc id would
+ * repeat, and get reused, every year.
+ */
+function resultKeyFor(session, term, classId) {
+  const s = (session || "session").replace(/[^a-zA-Z0-9]+/g, "-");
+  return `${s}_${term}_${classId}`;
+}
+
+async function fetchTermScores(schoolId, session, classId, term) {
+  const resultKey = resultKeyFor(session, term, classId);
   const snap = await getDocs(collection(db, "schools", schoolId, "results", resultKey, "scores"));
   const byStudent = {};
   snap.forEach((d) => {
@@ -32,6 +50,8 @@ export default function Results({ schoolId }) {
   const [reportStudentId, setReportStudentId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
 
   useEffect(() => {
     getDoc(doc(db, "schools", schoolId)).then((snap) => {
@@ -59,10 +79,10 @@ export default function Results({ schoolId }) {
   }, [schoolId, classId]);
 
   useEffect(() => {
-    if (!classId || !term) return;
-    const resultKey = `${term}_${classId}`;
+    if (!classId || !term || !school) return;
+    const resultKey = resultKeyFor(school.currentSession, term, classId);
     (async () => {
-      setScoresByStudent(await fetchTermScores(schoolId, classId, term));
+      setScoresByStudent(await fetchTermScores(schoolId, school.currentSession, classId, term));
       const metaSnap = await getDoc(doc(db, "schools", schoolId, "results", resultKey, "meta", "positions"));
       setPositions(metaSnap.exists() ? metaSnap.data().positions || {} : {});
 
@@ -78,7 +98,7 @@ export default function Results({ schoolId }) {
       reportSnap.forEach((d) => (meta[d.id] = d.data()));
       setReportMeta(meta);
     })();
-  }, [schoolId, classId, term]);
+  }, [schoolId, classId, term, school]);
 
   const selectedClass = classes.find((c) => c.id === classId);
   const subjects = selectedClass?.subjects || [];
@@ -96,7 +116,7 @@ export default function Results({ schoolId }) {
       });
       const computed = computeClassPositions(totals, subjects.map((s) => s.id));
       await setDoc(
-        doc(db, "schools", schoolId, "results", `${term}_${classId}`, "meta", "positions"),
+        doc(db, "schools", schoolId, "results", resultKeyFor(school?.currentSession, term, classId), "meta", "positions"),
         { positions: computed, computedAt: Date.now() },
         { merge: true }
       );
@@ -111,15 +131,28 @@ export default function Results({ schoolId }) {
   const saveTermDates = async (patch) => {
     const next = { ...termDates, ...patch };
     setTermDates(next);
-    await setDoc(doc(db, "schools", schoolId, "results", `${term}_${classId}`), next, { merge: true });
+    await setDoc(doc(db, "schools", schoolId, "results", resultKeyFor(school?.currentSession, term, classId)), next, { merge: true });
   };
 
   const saveReportMeta = async (studentId, data) => {
-    await setDoc(doc(db, "schools", schoolId, "results", `${term}_${classId}`, "reportMeta", studentId), data, {
-      merge: true,
-    });
+    await setDoc(
+      doc(db, "schools", schoolId, "results", resultKeyFor(school?.currentSession, term, classId), "reportMeta", studentId),
+      data,
+      { merge: true }
+    );
     setReportMeta((prev) => ({ ...prev, [studentId]: { ...prev[studentId], ...data } }));
   };
+
+  const classAverages = (() => {
+    const totals = {};
+    Object.entries(scoresByStudent).forEach(([studentId, subs]) => {
+      totals[studentId] = {};
+      Object.entries(subs).forEach(([subjectId, s]) => {
+        totals[studentId][subjectId] = s.total ?? 0;
+      });
+    });
+    return computeSubjectClassAverages(totals, subjects.map((s) => s.id));
+  })();
 
   const buildStudentExportData = (studentId) => {
     const s = students.find((st) => st.id === studentId);
@@ -130,7 +163,7 @@ export default function Results({ schoolId }) {
       const raw = scoresByStudent[studentId]?.[subj.id] || {};
       scores[subj.id] = {
         ...raw,
-        classAvg: "", // wired up once class-average calc is added to resultEngine
+        classAvg: classAverages[subj.id] ?? "",
         position: pos.subjectPositions?.[subj.id] || "",
       };
     });
@@ -152,6 +185,59 @@ export default function Results({ schoolId }) {
     };
   };
 
+  /**
+   * TEMPORARY one-time migration: older score docs (saved before `remark`
+   * was added alongside `grade` in ScoreEntryGrid's saveRow) are missing
+   * the `remark` field, so the Remarks column on exported reports is blank
+   * for them even though Grade shows fine. This walks every class/term for
+   * the school's current session, finds score docs that have a `total` but
+   * no `remark`, and patches just that field in using the same gradeFor()
+   * logic saveRow already uses — nothing else about the doc is touched.
+   * Safe to run more than once: docs that already have a remark are skipped.
+   * Remove this button + function once you've run it across all your
+   * classes/terms and confirmed the Remarks column is populated.
+   */
+  const backfillMissingRemarks = async () => {
+    if (!school || classes.length === 0) return;
+    setBackfilling(true);
+    setBackfillResult(null);
+    let checked = 0;
+    let patched = 0;
+    try {
+      for (const c of classes) {
+        const scale = gradingScaleFor(c.level);
+        for (const t of TERMS) {
+          const resultKey = resultKeyFor(school.currentSession, t, c.id);
+          const snap = await getDocs(collection(db, "schools", schoolId, "results", resultKey, "scores"));
+          if (snap.empty) continue;
+
+          let batch = writeBatch(db);
+          let opsInBatch = 0;
+          for (const d of snap.docs) {
+            checked++;
+            const data = d.data();
+            if (data.remark || data.total == null) continue; // already fixed, or nothing to grade yet
+            const { grade, remark } = gradeFor(data.total, scale);
+            batch.set(d.ref, { grade, remark }, { merge: true });
+            patched++;
+            opsInBatch++;
+            if (opsInBatch === 400) {
+              await batch.commit();
+              batch = writeBatch(db);
+              opsInBatch = 0;
+            }
+          }
+          if (opsInBatch > 0) await batch.commit();
+        }
+      }
+      setBackfillResult({ checked, patched });
+    } catch (err) {
+      setBackfillResult({ error: err.message });
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
   const doExport = async () => {
     setBusy(true);
     setError(null);
@@ -167,14 +253,15 @@ export default function Results({ schoolId }) {
         termEndingDate: termDates.termEndingDate,
         nextTermBegins: termDates.nextTermBegins,
         subjects,
+        weights: effectiveWeights(gradingScaleFor(selectedClass.level), school?.weights),
       };
 
       let cumulative;
       let exportStudents = students.map((s) => buildStudentExportData(s.id));
 
       if (isThirdTerm) {
-        const firstScores = await fetchTermScores(schoolId, classId, "First");
-        const secondScores = await fetchTermScores(schoolId, classId, "Second");
+        const firstScores = await fetchTermScores(schoolId, school?.currentSession, classId, "First");
+        const secondScores = await fetchTermScores(schoolId, school?.currentSession, classId, "Second");
         cumulative = {};
         students.forEach((s) => {
           cumulative[s.id] = {};
@@ -205,7 +292,13 @@ export default function Results({ schoolId }) {
       }
 
       const buffer = await exportClassResults(
-        { name: school?.name, address: school?.address, ministry: school?.ministry, logoUrl: school?.logoUrl },
+        {
+          name: school?.name,
+          address: school?.address,
+          ministry: school?.ministry,
+          logoUrl: school?.logoUrl,
+          govLogoUrl: school?.govLogoUrl,
+        },
         classInfo,
         exportStudents,
         { isThirdTerm, cumulative }
@@ -276,6 +369,30 @@ export default function Results({ schoolId }) {
             {busy ? "Working…" : "Export to Excel"}
           </button>
         </div>
+      </div>
+
+      {/* TEMPORARY: one-time migration for score docs saved before `remark`
+          existed. Remove this block once you've run it and confirmed every
+          class/term's Remarks column exports correctly. */}
+      <div className="card-pad bg-amber-50 border border-amber-100 flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="flex-1">
+          <p className="text-sm font-medium text-amber-900">Fix missing subject remarks (one-time)</p>
+          <p className="text-xs text-amber-700">
+            Scans every class/term for this session and fills in the Remarks column for any older score
+            entries that are missing it. Safe to run more than once.
+          </p>
+          {backfillResult && !backfillResult.error && (
+            <p className="text-xs text-emerald-700 mt-1">
+              Checked {backfillResult.checked} score entries, patched {backfillResult.patched} missing remarks.
+            </p>
+          )}
+          {backfillResult?.error && (
+            <p className="text-xs text-red-600 mt-1">Backfill failed: {backfillResult.error}</p>
+          )}
+        </div>
+        <button className="btn-secondary" disabled={backfilling} onClick={backfillMissingRemarks}>
+          {backfilling ? "Fixing…" : "Fix missing remarks"}
+        </button>
       </div>
 
       {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
