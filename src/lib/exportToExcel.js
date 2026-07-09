@@ -138,17 +138,18 @@ function bandHeader(sheet, r1, c1, r2, c2, value, opts = {}) {
 }
 
 // -------------------------------------------------------------------------
-// Logo embedding
+// Logo & signature embedding
 // -------------------------------------------------------------------------
 /**
- * Fetches a logo image (if a URL is configured) once per export and returns
- * an ExcelJS image id, or null if unavailable/unset. Failures here never
- * abort the export — the report is still fully usable without a logo.
+ * Fetches an image URL (logo or signature) and registers it with the
+ * workbook so it can be placed with sheet.addImage(). Returns the resulting
+ * ExcelJS image id, or null if unavailable/unset. Failures here never
+ * abort the export — the report is still fully usable without the image.
  */
-async function registerLogo(wb, logoUrl) {
-  if (!logoUrl) return null;
+async function registerImage(wb, url) {
+  if (!url) return null;
   try {
-    const res = await fetch(logoUrl);
+    const res = await fetch(url);
     if (!res.ok) return null;
     const contentType = res.headers.get("content-type") || "";
     const extension = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : "jpeg";
@@ -209,10 +210,27 @@ function placeLogos(sheet, top, colCount, columnWidths, govLogoImageId, schoolLo
   }
 }
 
+/**
+ * Drops a signature image into the narrow gap column that sits between a
+ * "Signature/Date:" label and the remark/date text beside it — that gap
+ * column is otherwise empty in both layouts, and spans the remark row
+ * directly above the signature row too, so there's room for a normal
+ * signature-scan aspect ratio without colliding with any text.
+ * `anchorRow` should be the block-relative row number of the REMARK row
+ * (the row directly above "Signature/Date:"), so the image spans both rows.
+ */
+function placeSignature(sheet, anchorRow, gapCol, imageId) {
+  if (imageId == null) return;
+  sheet.addImage(imageId, {
+    tl: { col: gapCol - 1 + 0.08, row: anchorRow - 1 + 0.15 },
+    ext: { width: 130, height: 65 },
+  });
+}
+
 // -------------------------------------------------------------------------
 // SINGLE TERM layout (First / Second Term) — columns A..K (1..11)
 // -------------------------------------------------------------------------
-function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectScores, govLogoImageId, schoolLogoImageId) {
+function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectScores, govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId) {
   const r = (offset) => top + offset; // offset 0 == the block's row 1 (school name)
 
   placeLogos(sheet, r(0), 11, COLUMN_WIDTHS_SINGLE, govLogoImageId, schoolLogoImageId);
@@ -364,6 +382,7 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 3, r(56), 8);
   cell(sheet, r(56), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
+  placeSignature(sheet, r(55), 2, formMasterSigImageId);
 
   cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(58), 3, r(58), 10);
@@ -371,12 +390,13 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 3, r(59), 8);
   cell(sheet, r(59), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
+  placeSignature(sheet, r(58), 2, principalSigImageId);
 }
 
 // -------------------------------------------------------------------------
 // THIRD TERM layout — columns A..N (1..14), adds Previous/Annual columns
 // -------------------------------------------------------------------------
-function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScores, cumulative, govLogoImageId, schoolLogoImageId) {
+function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScores, cumulative, govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId) {
   const r = (offset) => top + offset;
 
   placeLogos(sheet, r(0), 14, COLUMN_WIDTHS_THIRD, govLogoImageId, schoolLogoImageId);
@@ -601,6 +621,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 9, r(56), 11);
   cell(sheet, r(56), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
+  placeSignature(sheet, r(55), 3, formMasterSigImageId);
 
   merge(sheet, r(58), 1, r(58), 2);
   cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
@@ -610,6 +631,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 9, r(59), 11);
   cell(sheet, r(59), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
+  placeSignature(sheet, r(58), 3, principalSigImageId);
 }
 
 // -------------------------------------------------------------------------
@@ -617,7 +639,8 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
 // -------------------------------------------------------------------------
 
 /**
- * @param {Object} school     { name, address, ministry, logoUrl, govLogoUrl }
+ * @param {Object} school     { name, address, ministry, logoUrl, govLogoUrl,
+ *                               formMasterSigUrl, principalSigUrl }
  * @param {Object} classInfo  { className, level, stream, session, term, noInClass,
  *                               termEndingDate, nextTermBegins, subjects: [{id,name}],
  *                               weights: {ca1,ca2,test1,test2,exam} }
@@ -643,12 +666,17 @@ export async function exportClassResults(school, classInfo, students, options = 
   const columnWidths = isThirdTerm ? COLUMN_WIDTHS_THIRD : COLUMN_WIDTHS_SINGLE;
   for (let i = 1; i <= colCount; i++) sheet.getColumn(i).width = columnWidths[i - 1];
 
-  // Both logos are fetched once and re-used (by ExcelJS image id) across
-  // every student block, rather than re-downloaded per student. The Federal
-  // Government logo sits top-left, the school's own logo top-right.
-  const [govLogoImageId, schoolLogoImageId] = await Promise.all([
-    registerLogo(wb, school.govLogoUrl),
-    registerLogo(wb, school.logoUrl),
+  // Both logos, plus the Principal's and Form Master's signature images, are
+  // fetched once and re-used (by ExcelJS image id) across every student
+  // block, rather than re-downloaded per student. Previously only the logos
+  // were wired up here — the signature URLs were saved by the Settings page
+  // but never fetched or embedded, which is why the "Signature/Date:" line
+  // showed the date text but no actual signature image.
+  const [govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId] = await Promise.all([
+    registerImage(wb, school.govLogoUrl),
+    registerImage(wb, school.logoUrl),
+    registerImage(wb, school.formMasterSigUrl),
+    registerImage(wb, school.principalSigUrl),
   ]);
 
   // --- Print / page setup: one student block per A4 page ---------------
@@ -681,9 +709,9 @@ export async function exportClassResults(school, classInfo, students, options = 
   let top = 1;
   students.forEach((student, i) => {
     if (isThirdTerm) {
-      writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], govLogoImageId, schoolLogoImageId);
+      writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId);
     } else {
-      writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores, govLogoImageId, schoolLogoImageId);
+      writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores, govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId);
     }
     const isLastStudent = i === students.length - 1;
     if (!isLastStudent) {

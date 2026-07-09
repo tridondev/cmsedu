@@ -253,8 +253,7 @@ export default function Settings({ schoolId }) {
           </div>
         </div>
         <p className="text-xs text-slate-500 mt-3">
-          These are currently reference fields — wiring them into the exported image cells is a small follow-up in
-          exportToExcel.js once you're ready for it.
+          These images are embedded on the "Signature/Date:" line of every exported report card automatically.
         </p>
       </div>
 

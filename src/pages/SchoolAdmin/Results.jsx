@@ -298,6 +298,8 @@ export default function Results({ schoolId }) {
           ministry: school?.ministry,
           logoUrl: school?.logoUrl,
           govLogoUrl: school?.govLogoUrl,
+          formMasterSigUrl: school?.formMasterSigUrl,
+          principalSigUrl: school?.principalSigUrl,
         },
         classInfo,
         exportStudents,
