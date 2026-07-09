@@ -227,6 +227,26 @@ function placeSignature(sheet, anchorRow, gapCol, imageId) {
   });
 }
 
+/**
+ * Derives the "JUNIOR/SENIOR SECONDARY SCHOOL TERMLY REPORT" banner text
+ * from the class's actual level, instead of hardcoding one or the other.
+ * Checks `classInfo.level` first, falling back to `classInfo.className`
+ * (e.g. "JSS2", "SS2 Gold"). JSS is checked before SS because "JSS2"
+ * itself contains the substring "SS2", so SS must not be checked first.
+ */
+function reportTitleFor(classInfo) {
+  const source = `${classInfo.level || ""} ${classInfo.className || ""}`.toUpperCase();
+  if (source.includes("JSS") || source.includes("JUNIOR")) {
+    return "JUNIOR SECONDARY SCHOOL TERMLY REPORT";
+  }
+  if (source.includes("SS") || source.includes("SENIOR")) {
+    return "SENIOR SECONDARY SCHOOL TERMLY REPORT";
+  }
+  // Neither could be determined — fall back to a level-agnostic title
+  // rather than silently mislabeling the report.
+  return "SECONDARY SCHOOL TERMLY REPORT";
+}
+
 // -------------------------------------------------------------------------
 // SINGLE TERM layout (First / Second Term) — columns A..K (1..11)
 // -------------------------------------------------------------------------
@@ -247,7 +267,7 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(2), 1, (school.ministry || "").trim(), { bold: true, align: "center", size: 30, color: NAVY });
   sheet.getRow(r(2)).getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   merge(sheet, r(3), 1, r(3), 11);
-  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
+  cell(sheet, r(3), 1, reportTitleFor(classInfo), { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
 
   const LBL = { bold: true, size: 26, color: BLUE, wrap: false };
   const VAL = { bold: true, size: 26, color: BLACK, wrap: false };
@@ -413,7 +433,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(2), 1, (school.ministry || "").trim(), { bold: true, align: "center", size: 30, color: NAVY });
   sheet.getRow(r(2)).getCell(1).alignment = { horizontal: "center", vertical: "middle", wrapText: true };
   merge(sheet, r(3), 1, r(3), 14);
-  cell(sheet, r(3), 1, "JUNIOR SECONDARY SCHOOL TERMLY REPORT", { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
+  cell(sheet, r(3), 1, reportTitleFor(classInfo), { bold: true, align: "center", size: 36, color: LIGHT_BLUE });
 
   const LBL = { bold: true, size: 26, color: BLUE, wrap: false };
   const VAL = { bold: true, size: 26, color: BLACK, wrap: false };
