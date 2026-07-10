@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, onSnapshot, setDoc } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { computeSubjectTotal, gradeFor, computeClassPositions, gradingScaleFor, effectiveWeights } from "../../lib/resultEngine";
 
@@ -62,40 +62,67 @@ export default function ScoreEntryGrid({ schoolId }) {
   const subject = classInfo?.subjects?.find((s) => s.id === subjectId);
   const resultKey = term && classId ? resultKeyFor(session, term, classId) : null;
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const [schoolSnap, classSnap, studentsSnap] = await Promise.all([
-        getDoc(doc(db, "schools", schoolId)),
-        getDoc(doc(db, "schools", schoolId, "classes", classId)),
-        getDocs(collection(db, "schools", schoolId, "classes", classId, "students")),
-      ]);
-      const schoolData = schoolSnap.exists() ? schoolSnap.data() : {};
-      const currentTerm = schoolData.currentTerm || "First";
-      setTerm(currentTerm);
-      setSession(schoolData.currentSession || "");
-      const classData = classSnap.exists() ? classSnap.data() : null;
-      setClassInfo(classData);
-      setWeights(effectiveWeights(gradingScaleFor(classData?.level), schoolData.weights));
-      const studentList = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      setStudents(studentList);
+  const [schoolData, setSchoolData] = useState(null);
+  const [classLoaded, setClassLoaded] = useState(false);
+  const [studentsLoaded, setStudentsLoaded] = useState(false);
 
-      // Preload any scores already entered this term for this subject.
-      const key = resultKeyFor(schoolData.currentSession, currentTerm, classId);
+  // Live: current term/session/grading weights — reflects admin changes
+  // (e.g. switching term, editing weights) without a page refresh.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "schools", schoolId), (snap) => {
+      const data = snap.exists() ? snap.data() : {};
+      setSchoolData(data);
+      setTerm(data.currentTerm || "First");
+      setSession(data.currentSession || "");
+    });
+    return unsub;
+  }, [schoolId]);
+
+  // Live: class name/level/subjects — reflects admin edits (like a newly
+  // added subject) immediately.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "schools", schoolId, "classes", classId), (snap) => {
+      setClassInfo(snap.exists() ? snap.data() : null);
+      setClassLoaded(true);
+    });
+    return unsub;
+  }, [schoolId, classId]);
+
+  // Live: student roster for this class.
+  useEffect(() => {
+    setStudentsLoaded(false);
+    const unsub = onSnapshot(collection(db, "schools", schoolId, "classes", classId, "students"), (snap) => {
+      setStudents(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      setStudentsLoaded(true);
+    });
+    return unsub;
+  }, [schoolId, classId]);
+
+  useEffect(() => {
+    if (classInfo !== null) setWeights(effectiveWeights(gradingScaleFor(classInfo?.level), schoolData?.weights));
+  }, [classInfo, schoolData]);
+
+  // Preload any scores already entered this term for this subject. Re-runs
+  // whenever the roster or the active term/session changes.
+  useEffect(() => {
+    if (!classLoaded || !studentsLoaded || !resultKey) return;
+    (async () => {
       const existing = {};
+      const nextSaved = {};
       await Promise.all(
-        studentList.map(async (s) => {
-          const scoreDoc = await getDoc(doc(db, "schools", schoolId, "results", key, "scores", `${s.id}_${subjectId}`));
+        students.map(async (s) => {
+          const scoreDoc = await getDoc(doc(db, "schools", schoolId, "results", resultKey, "scores", `${s.id}_${subjectId}`));
           if (scoreDoc.exists()) {
             existing[s.id] = scoreDoc.data();
-            setSavedRows((prev) => ({ ...prev, [s.id]: true }));
+            nextSaved[s.id] = true;
           }
         })
       );
       setScores(existing);
+      setSavedRows(nextSaved);
       setLoading(false);
     })();
-  }, [schoolId, classId, subjectId]);
+  }, [schoolId, classLoaded, studentsLoaded, students, subjectId, resultKey]);
 
   const updateField = (studentId, field, value) => {
     setScores((prev) => ({
@@ -133,7 +160,7 @@ export default function ScoreEntryGrid({ schoolId }) {
 
   return (
     <div>
-      <Link to="../.." relative="path" className="text-sm text-brand-600 font-medium mb-3 inline-flex items-center gap-1">
+      <Link to=".." className="text-sm text-brand-600 font-medium mb-3 inline-flex items-center gap-1">
         ← Back to my classes
       </Link>
       <h2 className="page-title">

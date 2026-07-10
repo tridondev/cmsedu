@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query, where } from "firebase/firestore";
+import { collection, doc, getDocs, onSnapshot, orderBy, query, where } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import CircularProgress from "../../components/CircularProgress";
 
@@ -13,25 +13,44 @@ const TERMS = ["First", "Second", "Third"];
 
 /**
  * Lets a school admin see, at a glance, how much of each class's score
- * entry every teacher has completed for the current (or a chosen) term —
- * one ring per class/subject, same completion logic the teacher's own "My
- * classes" progress ring uses, so the two always agree.
+ * entry every teacher has completed for a chosen session/term — one ring
+ * per class/subject, same completion logic the teacher's own "My classes"
+ * progress ring uses, so the two always agree.
+ *
+ * Session/term default to whatever is currently set on the Settings tab,
+ * but can be switched independently here to review a past session/term —
+ * every academic session started from Settings shows up as an option so
+ * progress stays trackable across the school's whole history.
  */
 export default function Progress({ schoolId }) {
   const [school, setSchool] = useState(null);
+  const [pastSessions, setPastSessions] = useState([]); // [{id, label}]
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
-  const [term, setTerm] = useState("First");
+  const [session, setSession] = useState(null);
+  const [term, setTerm] = useState(null);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Live: school doc, so the default session/term always tracks what's set
+  // on the Settings tab. Only used to seed the pickers the first time —
+  // once the admin picks a session/term here, that choice is left alone.
   useEffect(() => {
-    getDoc(doc(db, "schools", schoolId)).then((snap) => {
-      if (snap.exists()) {
-        setSchool(snap.data());
-        if (snap.data().currentTerm) setTerm(snap.data().currentTerm);
-      }
+    const unsub = onSnapshot(doc(db, "schools", schoolId), (snap) => {
+      if (!snap.exists()) return;
+      const data = snap.data();
+      setSchool(data);
+      setSession((prev) => prev ?? data.currentSession ?? "");
+      setTerm((prev) => prev ?? data.currentTerm ?? "First");
     });
+    return unsub;
+  }, [schoolId]);
+
+  // Live: every past session archived when Settings > "Start new academic
+  // session" was used, so they're selectable here too.
+  useEffect(() => {
+    const q = query(collection(db, "schools", schoolId, "sessions"), orderBy("label"));
+    return onSnapshot(q, (snap) => setPastSessions(snap.docs.map((d) => ({ id: d.id, label: d.data().label }))));
   }, [schoolId]);
 
   useEffect(() => {
@@ -44,11 +63,17 @@ export default function Progress({ schoolId }) {
     return onSnapshot(q, (snap) => setTeachers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
   }, [schoolId]);
 
+  const sessionOptions = (() => {
+    const set = new Set(pastSessions.map((s) => s.label));
+    if (school?.currentSession) set.add(school.currentSession);
+    if (session) set.add(session);
+    return [...set].filter(Boolean);
+  })();
+
   useEffect(() => {
-    if (!school || classes.length === 0) return;
+    if (session === null || term === null || classes.length === 0) return;
     (async () => {
       setLoading(true);
-      const session = school.currentSession || "";
       const nextRows = [];
       await Promise.all(
         classes.map(async (c) => {
@@ -66,34 +91,54 @@ export default function Progress({ schoolId }) {
             const teacher = teachers.find((t) =>
               (t.assignedSubjects || []).some((a) => a.classId === c.id && a.subjectId === subj.id)
             );
+            const done = perSubject[subj.id] || 0;
             nextRows.push({
               key: `${c.id}:${subj.id}`,
               className: c.name,
               subjectName: subj.name,
               teacherName: teacher?.name || "Unassigned",
-              done: perSubject[subj.id] || 0,
+              done,
               total: totalStudents,
+              pct: totalStudents ? (done / totalStudents) * 100 : 0,
             });
           });
         })
       );
-      nextRows.sort((a, b) => a.className.localeCompare(b.className) || a.subjectName.localeCompare(b.subjectName));
+      // Fully-filled subjects rank top, then most-complete to least; ties
+      // broken alphabetically so the order stays stable and scannable.
+      nextRows.sort(
+        (a, b) => b.pct - a.pct || a.className.localeCompare(b.className) || a.subjectName.localeCompare(b.subjectName)
+      );
       setRows(nextRows);
       setLoading(false);
     })();
-  }, [schoolId, school, classes, teachers, term]);
+  }, [schoolId, session, term, classes, teachers]);
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h2 className="page-title">Score entry progress</h2>
-        <p className="page-subtitle">See how much of each class/subject's scores teachers have entered this term.</p>
+        <p className="page-subtitle">
+          See how much of each class/subject's scores teachers have entered. Defaults to the session/term set on the
+          Settings tab — fully entered subjects are listed first.
+        </p>
       </div>
 
-      <div className="card-pad flex flex-col sm:flex-row sm:items-end gap-3 max-w-md">
+      <div className="card-pad flex flex-col sm:flex-row gap-3 max-w-2xl">
+        <div className="flex-1">
+          <label className="field-label">Session</label>
+          <select className="input" value={session ?? ""} onChange={(e) => setSession(e.target.value)}>
+            {sessionOptions.map((s) => (
+              <option key={s} value={s}>
+                {s}
+                {s === school?.currentSession ? " (current)" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex-1">
           <label className="field-label">Term</label>
-          <select className="input" value={term} onChange={(e) => setTerm(e.target.value)}>
+          <select className="input" value={term ?? "First"} onChange={(e) => setTerm(e.target.value)}>
             {TERMS.map((t) => (
               <option key={t} value={t}>
                 {t} Term
@@ -130,43 +175,43 @@ export default function Progress({ schoolId }) {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
-                  const pct = row.total ? (row.done / row.total) * 100 : 0;
-                  return (
-                    <tr key={row.key}>
-                      <td className="font-medium text-slate-800">{row.className}</td>
-                      <td>{row.subjectName}</td>
-                      <td className="text-slate-500">{row.teacherName}</td>
-                      <td className="text-center">
-                        {row.done}/{row.total}
-                      </td>
-                      <td className="text-center">
-                        <CircularProgress percent={pct} size={36} label={`${Math.round(pct)}% complete`} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                {rows.map((row) => (
+                  <tr key={row.key}>
+                    <td className="font-medium text-slate-800">{row.className}</td>
+                    <td>
+                      {row.subjectName}
+                      {row.pct === 100 && row.total > 0 && <span className="badge-green ml-2">Complete</span>}
+                    </td>
+                    <td className="text-slate-500">{row.teacherName}</td>
+                    <td className="text-center">
+                      {row.done}/{row.total}
+                    </td>
+                    <td className="text-center">
+                      <CircularProgress percent={row.pct} size={36} label={`${Math.round(row.pct)}% complete`} />
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
 
           {/* Mobile cards */}
           <div className="sm:hidden flex flex-col gap-3">
-            {rows.map((row) => {
-              const pct = row.total ? (row.done / row.total) * 100 : 0;
-              return (
-                <div key={row.key} className="row-card flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-slate-900 text-sm">{row.className}</p>
-                    <p className="text-slate-500 text-xs mt-0.5">{row.subjectName}</p>
-                    <p className="text-slate-400 text-[11px] mt-1">
-                      {row.teacherName} · {row.done}/{row.total}
-                    </p>
-                  </div>
-                  <CircularProgress percent={pct} label={`${Math.round(pct)}% complete`} />
+            {rows.map((row) => (
+              <div key={row.key} className="row-card flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                    {row.className}
+                    {row.pct === 100 && row.total > 0 && <span className="badge-green">Complete</span>}
+                  </p>
+                  <p className="text-slate-500 text-xs mt-0.5">{row.subjectName}</p>
+                  <p className="text-slate-400 text-[11px] mt-1">
+                    {row.teacherName} · {row.done}/{row.total}
+                  </p>
                 </div>
-              );
-            })}
+                <CircularProgress percent={row.pct} label={`${Math.round(row.pct)}% complete`} />
+              </div>
+            ))}
           </div>
         </>
       )}

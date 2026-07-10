@@ -1,6 +1,6 @@
 import { Routes, Route, Link } from "react-router-dom";
-import { useEffect, useState } from "react";
-import { collection, doc, getDoc, getDocs } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
+import { collection, doc, onSnapshot } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useAuth } from "../../context/AuthContext";
 import AppShell from "../../components/AppShell";
@@ -13,68 +13,128 @@ function resultKeyFor(session, term, classId) {
   return `${s}_${term}_${classId}`;
 }
 
+function SearchIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
 function TeacherHome({ schoolId }) {
   const { user } = useAuth();
   const [assignments, setAssignments] = useState([]);
-  const [classNames, setClassNames] = useState({});
-  const [progress, setProgress] = useState({}); // "classId:subjectId" -> { done, total }
+  const [classes, setClasses] = useState({}); // classId -> class data
+  const [term, setTerm] = useState("First");
+  const [session, setSession] = useState("");
+  const [studentCounts, setStudentCounts] = useState({}); // classId -> count
+  const [scoreCounts, setScoreCounts] = useState({}); // "classId:subjectId" -> done count
   const [loading, setLoading] = useState(true);
+  const [classFilter, setClassFilter] = useState("");
+  const [search, setSearch] = useState("");
 
+  // Live: this teacher's own assignment list — updates the moment the admin
+  // (re)assigns classes/subjects, no refresh needed.
   useEffect(() => {
     if (!user) return;
-    (async () => {
-      const [userDoc, schoolDoc] = await Promise.all([
-        getDoc(doc(db, "schools", schoolId, "users", user.uid)),
-        getDoc(doc(db, "schools", schoolId)),
-      ]);
-      const list = userDoc.exists() ? userDoc.data().assignedSubjects || [] : [];
-      setAssignments(list);
+    const unsub = onSnapshot(doc(db, "schools", schoolId, "users", user.uid), (snap) => {
+      setAssignments(snap.exists() ? snap.data().assignedSubjects || [] : []);
+      setLoading(false);
+    });
+    return unsub;
+  }, [schoolId, user]);
 
-      const school = schoolDoc.exists() ? schoolDoc.data() : {};
-      const term = school.currentTerm || "First";
-      const session = school.currentSession || "";
+  // Live: current term/session, so score entry always targets the right period.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "schools", schoolId), (snap) => {
+      const data = snap.exists() ? snap.data() : {};
+      setTerm(data.currentTerm || "First");
+      setSession(data.currentSession || "");
+    });
+    return unsub;
+  }, [schoolId]);
 
-      const names = {};
-      const studentCounts = {};
-      await Promise.all(
-        [...new Set(list.map((a) => a.classId))].map(async (classId) => {
-          const [classDoc, studentsSnap] = await Promise.all([
-            getDoc(doc(db, "schools", schoolId, "classes", classId)),
-            getDocs(collection(db, "schools", schoolId, "classes", classId, "students")),
-          ]);
-          if (classDoc.exists()) names[classId] = classDoc.data();
-          studentCounts[classId] = studentsSnap.size;
-        })
-      );
-      setClassNames(names);
+  // Live: every class this teacher is assigned to — picks up admin edits to
+  // the class name, level, or subject list (e.g. a newly added subject)
+  // immediately.
+  useEffect(() => {
+    const classIds = [...new Set(assignments.map((a) => a.classId))];
+    if (classIds.length === 0) {
+      setClasses({});
+      return;
+    }
+    const unsubs = classIds.map((classId) =>
+      onSnapshot(doc(db, "schools", schoolId, "classes", classId), (snap) => {
+        setClasses((prev) => ({ ...prev, [classId]: snap.exists() ? snap.data() : null }));
+      })
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [schoolId, assignments]);
 
-      // For each class this teacher touches, pull all saved score docs once
-      // and tally how many belong to each subject — that count vs. the
-      // class roster size is the "entry complete" percentage per assignment.
-      const nextProgress = {};
-      await Promise.all(
-        [...new Set(list.map((a) => a.classId))].map(async (classId) => {
-          const resultKey = resultKeyFor(session, term, classId);
-          const scoresSnap = await getDocs(collection(db, "schools", schoolId, "results", resultKey, "scores"));
-          const perSubject = {};
-          scoresSnap.forEach((d) => {
-            const subjectId = d.id.split("_")[1];
-            perSubject[subjectId] = (perSubject[subjectId] || 0) + 1;
-          });
-          list
+  // Live: roster size per class, for the "done/total" ring.
+  useEffect(() => {
+    const classIds = [...new Set(assignments.map((a) => a.classId))];
+    if (classIds.length === 0) {
+      setStudentCounts({});
+      return;
+    }
+    const unsubs = classIds.map((classId) =>
+      onSnapshot(collection(db, "schools", schoolId, "classes", classId, "students"), (snap) => {
+        setStudentCounts((prev) => ({ ...prev, [classId]: snap.size }));
+      })
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [schoolId, assignments]);
+
+  // Live: saved score counts per class/subject, for the completion ring.
+  useEffect(() => {
+    const classIds = [...new Set(assignments.map((a) => a.classId))];
+    if (classIds.length === 0) {
+      setScoreCounts({});
+      return;
+    }
+    const unsubs = classIds.map((classId) => {
+      const resultKey = resultKeyFor(session, term, classId);
+      return onSnapshot(collection(db, "schools", schoolId, "results", resultKey, "scores"), (snap) => {
+        const perSubject = {};
+        snap.forEach((d) => {
+          const subjectId = d.id.split("_")[1];
+          perSubject[subjectId] = (perSubject[subjectId] || 0) + 1;
+        });
+        setScoreCounts((prev) => {
+          const next = { ...prev };
+          assignments
             .filter((a) => a.classId === classId)
             .forEach((a) => {
-              nextProgress[`${a.classId}:${a.subjectId}`] = {
-                done: perSubject[a.subjectId] || 0,
-                total: studentCounts[classId] || 0,
-              };
+              next[`${a.classId}:${a.subjectId}`] = perSubject[a.subjectId] || 0;
             });
-        })
-      );
-      setProgress(nextProgress);
-      setLoading(false);
-    })();
-  }, [schoolId, user]);
+          return next;
+        });
+      });
+    });
+    return () => unsubs.forEach((u) => u());
+  }, [schoolId, assignments, session, term]);
+
+  const classOptions = useMemo(() => {
+    const seen = new Map();
+    assignments.forEach((a) => {
+      if (!seen.has(a.classId)) seen.set(a.classId, classes[a.classId]?.name || a.classId);
+    });
+    return [...seen.entries()];
+  }, [assignments, classes]);
+
+  const visibleAssignments = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return assignments.filter((a) => {
+      if (classFilter && a.classId !== classFilter) return false;
+      if (!term) return true;
+      const cls = classes[a.classId];
+      const subject = cls?.subjects?.find((s) => s.id === a.subjectId);
+      const haystack = `${cls?.name || ""} ${subject?.name || ""}`.toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [assignments, classes, classFilter, search]);
 
   if (loading) {
     return (
@@ -90,33 +150,62 @@ function TeacherHome({ schoolId }) {
     <div>
       <h2 className="page-title">Your classes</h2>
       <p className="page-subtitle mb-6">Tap a class/subject to enter scores. The ring shows how much of the roster you've completed.</p>
-      {assignments.length === 0 && (
+
+      {assignments.length === 0 ? (
         <div className="card-pad text-center text-slate-400 text-sm">No subjects assigned yet — ask your school admin.</div>
+      ) : (
+        <>
+          <div className="flex flex-col sm:flex-row gap-3 mb-5">
+            <div className="relative flex-1 max-w-sm">
+              <SearchIcon className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                className="input pl-9"
+                placeholder="Search your classes or subjects…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+            <select className="input sm:w-56" value={classFilter} onChange={(e) => setClassFilter(e.target.value)}>
+              <option value="">All classes</option>
+              {classOptions.map(([id, name]) => (
+                <option key={id} value={id}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {visibleAssignments.length === 0 && (
+            <div className="card-pad text-center text-slate-400 text-sm">No classes match your search.</div>
+          )}
+
+          <div className="grid sm:grid-cols-2 gap-3">
+            {visibleAssignments.map((a) => {
+              const cls = classes[a.classId];
+              const subject = cls?.subjects?.find((s) => s.id === a.subjectId);
+              const done = scoreCounts[`${a.classId}:${a.subjectId}`] || 0;
+              const total = studentCounts[a.classId] || 0;
+              const pct = total ? (done / total) * 100 : 0;
+              return (
+                <Link
+                  key={`${a.classId}:${a.subjectId}`}
+                  to={`entry/${a.classId}/${a.subjectId}`}
+                  className="card-pad hover:shadow-lifted hover:-translate-y-0.5 transition flex items-center justify-between gap-3"
+                >
+                  <div>
+                    <p className="font-semibold text-slate-900 text-sm">{cls?.name || a.classId}</p>
+                    <p className="text-slate-500 text-xs mt-0.5">{subject?.name || a.subjectId}</p>
+                    <p className="text-slate-400 text-[11px] mt-1">
+                      {done}/{total} students entered
+                    </p>
+                  </div>
+                  <CircularProgress percent={pct} label={`${Math.round(pct)}% complete`} />
+                </Link>
+              );
+            })}
+          </div>
+        </>
       )}
-      <div className="grid sm:grid-cols-2 gap-3">
-        {assignments.map((a) => {
-          const cls = classNames[a.classId];
-          const subject = cls?.subjects?.find((s) => s.id === a.subjectId);
-          const p = progress[`${a.classId}:${a.subjectId}`] || { done: 0, total: 0 };
-          const pct = p.total ? (p.done / p.total) * 100 : 0;
-          return (
-            <Link
-              key={`${a.classId}:${a.subjectId}`}
-              to={`entry/${a.classId}/${a.subjectId}`}
-              className="card-pad hover:shadow-lifted hover:-translate-y-0.5 transition flex items-center justify-between gap-3"
-            >
-              <div>
-                <p className="font-semibold text-slate-900 text-sm">{cls?.name || a.classId}</p>
-                <p className="text-slate-500 text-xs mt-0.5">{subject?.name || a.subjectId}</p>
-                <p className="text-slate-400 text-[11px] mt-1">
-                  {p.done}/{p.total} students entered
-                </p>
-              </div>
-              <CircularProgress percent={pct} label={`${Math.round(pct)}% complete`} />
-            </Link>
-          );
-        })}
-      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 import { db, auth } from "../../firebase/config";
 
 export default function Teachers({ schoolId }) {
@@ -12,6 +12,12 @@ export default function Teachers({ schoolId }) {
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  // Managing (reassign/remove) an existing teacher's class/subject assignments
+  const [managingId, setManagingId] = useState(null);
+  const [managingSelected, setManagingSelected] = useState({});
+  const [managingSaving, setManagingSaving] = useState(false);
+  const [managingError, setManagingError] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "schools", schoolId, "users"), where("role", "==", "teacher"));
@@ -62,6 +68,50 @@ export default function Teachers({ schoolId }) {
       setError(err.message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const removeAssignment = async (teacher, classId, subjectId) => {
+    if (!confirm("Remove this assignment? The teacher will no longer see this class/subject.")) return;
+    const next = (teacher.assignedSubjects || []).filter((a) => !(a.classId === classId && a.subjectId === subjectId));
+    await updateDoc(doc(db, "schools", schoolId, "users", teacher.id), { assignedSubjects: next });
+  };
+
+  const startManage = (teacher) => {
+    const map = {};
+    (teacher.assignedSubjects || []).forEach((a) => (map[`${a.classId}:${a.subjectId}`] = true));
+    setManagingId(teacher.id);
+    setManagingSelected(map);
+    setManagingError(null);
+  };
+
+  const cancelManage = () => {
+    setManagingId(null);
+    setManagingSelected({});
+    setManagingError(null);
+  };
+
+  const toggleManaging = (classId, subjectId) => {
+    const key = `${classId}:${subjectId}`;
+    setManagingSelected({ ...managingSelected, [key]: !managingSelected[key] });
+  };
+
+  const saveManage = async () => {
+    const next = Object.entries(managingSelected)
+      .filter(([, checked]) => checked)
+      .map(([key]) => {
+        const [classId, subjectId] = key.split(":");
+        return { classId, subjectId };
+      });
+    setManagingSaving(true);
+    setManagingError(null);
+    try {
+      await updateDoc(doc(db, "schools", schoolId, "users", managingId), { assignedSubjects: next });
+      cancelManage();
+    } catch (err) {
+      setManagingError(err.message);
+    } finally {
+      setManagingSaving(false);
     }
   };
 
@@ -125,18 +175,83 @@ export default function Teachers({ schoolId }) {
         <div className="flex flex-col gap-2 mt-4">
           {teachers.map((t) => (
             <div key={t.id} className="row-card">
-              <p className="font-semibold text-slate-900 text-sm">
-                {t.name} <span className="text-slate-400 font-normal">· {t.email}</span>
-              </p>
-              <p className="text-slate-500 text-xs mt-1">
-                {(t.assignedSubjects || [])
-                  .map((a) => {
-                    const cls = classes.find((c) => c.id === a.classId);
-                    const subj = cls?.subjects?.find((s) => s.id === a.subjectId);
-                    return `${cls?.name || a.classId} · ${subj?.name || a.subjectId}`;
-                  })
-                  .join(", ") || "No assignments"}
-              </p>
+              <div className="sm:flex sm:items-start sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-semibold text-slate-900 text-sm">
+                    {t.name} <span className="text-slate-400 font-normal">· {t.email}</span>
+                  </p>
+                  {(t.assignedSubjects || []).length === 0 ? (
+                    <p className="text-slate-400 text-xs mt-1">No assignments</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {(t.assignedSubjects || []).map((a) => {
+                        const cls = classes.find((c) => c.id === a.classId);
+                        const subj = cls?.subjects?.find((s) => s.id === a.subjectId);
+                        return (
+                          <span key={`${a.classId}:${a.subjectId}`} className="badge-slate pr-1.5">
+                            {cls?.name || a.classId} · {subj?.name || a.subjectId}
+                            <button
+                              type="button"
+                              title="Remove this assignment"
+                              className="h-4 w-4 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 flex items-center justify-center text-xs"
+                              onClick={() => removeAssignment(t, a.classId, a.subjectId)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="btn-sm btn-secondary shrink-0 mt-2 sm:mt-0"
+                  onClick={() => (managingId === t.id ? cancelManage() : startManage(t))}
+                >
+                  {managingId === t.id ? "Cancel" : "Reassign"}
+                </button>
+              </div>
+
+              {managingId === t.id && (
+                <div className="mt-3 pt-3 border-t border-slate-100 flex flex-col gap-3">
+                  <label className="field-label">Assign {t.name} to class/subject</label>
+                  <div className="flex flex-col gap-3 max-h-64 overflow-y-auto border border-slate-200 rounded-xl p-3">
+                    {classes.map((c) => (
+                      <div key={c.id}>
+                        <p className="text-xs font-semibold text-slate-500">{c.name}</p>
+                        <div className="flex flex-wrap gap-2 mt-1.5">
+                          {(c.subjects || []).map((s) => {
+                            const key = `${c.id}:${s.id}`;
+                            return (
+                              <label key={key} className={`chip ${managingSelected[key] ? "chip-active" : ""}`}>
+                                <input
+                                  type="checkbox"
+                                  className="hidden"
+                                  checked={!!managingSelected[key]}
+                                  onChange={() => toggleManaging(c.id, s.id)}
+                                />
+                                {s.name}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                    {classes.length === 0 && <p className="text-slate-400 text-xs">No classes yet.</p>}
+                  </div>
+                  {managingError && (
+                    <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{managingError}</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button className="btn-primary btn-sm px-5" disabled={managingSaving} onClick={saveManage}>
+                      {managingSaving ? "Saving…" : "Save assignments"}
+                    </button>
+                    <button className="btn-ghost btn-sm" onClick={cancelManage}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
           {teachers.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No teachers yet.</div>}
