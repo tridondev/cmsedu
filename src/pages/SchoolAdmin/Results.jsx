@@ -8,8 +8,9 @@ import {
   gradingScaleFor,
   effectiveWeights,
   gradeFor,
+  rankWithTies,
 } from "../../lib/resultEngine";
-import { exportClassResults, downloadWorkbook } from "../../lib/exportToExcel";
+import { exportClassResults, exportCombinedResults, downloadWorkbook } from "../../lib/exportToExcel";
 import StudentReportModal from "../../components/StudentReportModal";
 
 const TERMS = ["First", "Second", "Third"];
@@ -40,6 +41,8 @@ async function fetchTermScores(schoolId, session, classId, term) {
 export default function Results({ schoolId }) {
   const [classes, setClasses] = useState([]);
   const [classId, setClassId] = useState("");
+  const [scope, setScope] = useState("class"); // "class" | "level"
+  const [level, setLevel] = useState("");
   const [term, setTerm] = useState("First");
   const [school, setSchool] = useState(null);
   const [students, setStudents] = useState([]);
@@ -69,6 +72,7 @@ export default function Results({ schoolId }) {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setClasses(list);
       if (!classId && list.length) setClassId(list[0].id);
+      if (!level && list.length) setLevel(list[0].level);
     });
   }, [schoolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -102,6 +106,8 @@ export default function Results({ schoolId }) {
 
   const selectedClass = classes.find((c) => c.id === classId);
   const subjects = selectedClass?.subjects || [];
+  const levels = [...new Set(classes.map((c) => c.level))].sort();
+  const levelClasses = classes.filter((c) => c.level === level);
 
   const recompute = async () => {
     setBusy(true);
@@ -313,6 +319,156 @@ export default function Results({ schoolId }) {
     }
   };
 
+  /**
+   * Whole-level export: e.g. all of SS1 (Science + Art + Commercial) in one
+   * workbook, ranked together by average rather than each stream only
+   * against itself. Streams keep their own subject list on the page (a
+   * Science student's report still only shows Science subjects) — only the
+   * POSITION shown is the combined, whole-level rank.
+   *
+   * Ranking uses each student's own AVERAGE, not total, since streams take
+   * different numbers of subjects — comparing raw totals across streams
+   * with different subject counts would unfairly favour whichever stream
+   * happens to take more subjects.
+   */
+  const doExportCombined = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const isThirdTerm = term === "Third";
+
+      const groupData = await Promise.all(
+        levelClasses.map(async (cls) => {
+          const resultKey = resultKeyFor(school?.currentSession, term, cls.id);
+          const [studentsSnap, scoresByStudent, metaSnap, resultDocSnap, reportSnap] = await Promise.all([
+            getDocs(query(collection(db, "schools", schoolId, "classes", cls.id, "students"), orderBy("fullName"))),
+            fetchTermScores(schoolId, school?.currentSession, cls.id, term),
+            getDoc(doc(db, "schools", schoolId, "results", resultKey, "meta", "positions")),
+            getDoc(doc(db, "schools", schoolId, "results", resultKey)),
+            getDocs(collection(db, "schools", schoolId, "results", resultKey, "reportMeta")),
+          ]);
+          const clsStudents = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => !s.graduated);
+          const clsPositions = metaSnap.exists() ? metaSnap.data().positions || {} : {};
+          const clsResultData = resultDocSnap.exists() ? resultDocSnap.data() : {};
+          const clsReportMeta = {};
+          reportSnap.forEach((d) => (clsReportMeta[d.id] = d.data()));
+          const clsAverages = computeSubjectClassAverages(
+            Object.fromEntries(Object.entries(scoresByStudent).map(([sid, subs]) => [sid, Object.fromEntries(Object.entries(subs).map(([subId, s]) => [subId, s.total ?? 0]))])),
+            (cls.subjects || []).map((s) => s.id)
+          );
+
+          return { cls, clsStudents, scoresByStudent, clsPositions, clsResultData, clsReportMeta, clsAverages };
+        })
+      );
+
+      const combinedTotal = groupData.reduce((n, g) => n + g.clsStudents.length, 0);
+
+      // Pool every student's own average (from their own stream's subjects)
+      // and rank the whole level together.
+      const averagesForRanking = [];
+      groupData.forEach((g) => {
+        g.clsStudents.forEach((s) => {
+          const avg = g.clsPositions[s.id]?.overallAverage;
+          if (avg != null) averagesForRanking.push({ studentId: s.id, score: avg });
+        });
+      });
+      const combinedPositions = rankWithTies(averagesForRanking);
+
+      const groups = [];
+      let cumulativeForExport = {};
+
+      for (const g of groupData) {
+        const subjects = g.cls.subjects || [];
+        const classInfo = {
+          className: g.cls.name,
+          level: g.cls.level,
+          stream: g.cls.stream,
+          session: school?.currentSession || "",
+          term: `${term} Term`,
+          noInClass: combinedTotal,
+          termEndingDate: g.clsResultData.termEndingDate || "",
+          nextTermBegins: g.clsResultData.nextTermBegins || "",
+          subjects,
+          weights: effectiveWeights(gradingScaleFor(g.cls.level), school?.weights),
+        };
+
+        const exportStudents = g.clsStudents.map((s) => {
+          const pos = g.clsPositions[s.id] || {};
+          const meta = g.clsReportMeta[s.id] || {};
+          const scores = {};
+          subjects.forEach((subj) => {
+            const raw = g.scoresByStudent[s.id]?.[subj.id] || {};
+            scores[subj.id] = { ...raw, classAvg: g.clsAverages[subj.id] ?? "", position: pos.subjectPositions?.[subj.id] || "" };
+          });
+          return {
+            id: s.id,
+            fullName: s.fullName || "",
+            examNo: s.examNo || "",
+            sex: s.sex || "",
+            stateOfOrigin: s.stateOfOrigin || "",
+            lga: s.lga || "",
+            scores,
+            overallPosition: combinedPositions[s.id] || pos.overallPosition || "",
+            overallAverage: pos.overallAverage || "",
+            behaviour: meta.behaviour || {},
+            formMasterRemark: meta.formMasterRemark || "",
+            principalRemark: meta.principalRemark || "",
+            signatureDate: meta.signatureDate || "",
+            promotionComment: meta.promotionComment || "",
+          };
+        });
+
+        if (isThirdTerm) {
+          const firstScores = await fetchTermScores(schoolId, school?.currentSession, g.cls.id, "First");
+          const secondScores = await fetchTermScores(schoolId, school?.currentSession, g.cls.id, "Second");
+          const termTotals = { First: {}, Second: {}, Third: {} };
+          g.clsStudents.forEach((s) => {
+            termTotals.First[s.id] = {};
+            termTotals.Second[s.id] = {};
+            termTotals.Third[s.id] = {};
+            subjects.forEach((subj) => {
+              termTotals.First[s.id][subj.id] = firstScores[s.id]?.[subj.id]?.total || 0;
+              termTotals.Second[s.id][subj.id] = secondScores[s.id]?.[subj.id]?.total || 0;
+              termTotals.Third[s.id][subj.id] = g.scoresByStudent[s.id]?.[subj.id]?.total || 0;
+            });
+            cumulativeForExport[s.id] = {};
+            subjects.forEach((subj) => {
+              cumulativeForExport[s.id][subj.id] = {
+                term1: firstScores[s.id]?.[subj.id]?.total ?? "",
+                term2: secondScores[s.id]?.[subj.id]?.total ?? "",
+              };
+            });
+          });
+          const cumulativePositions = computeCumulativeTerm(termTotals, subjects.map((s) => s.id));
+          exportStudents.forEach((s) => {
+            s.cumulativePosition = cumulativePositions[s.id]?.overallPosition || "";
+          });
+        }
+
+        groups.push({ classInfo, students: exportStudents });
+      }
+
+      const buffer = await exportCombinedResults(
+        {
+          name: school?.name,
+          address: school?.address,
+          ministry: school?.ministry,
+          logoUrl: school?.logoUrl,
+          govLogoUrl: school?.govLogoUrl,
+          formMasterSigUrl: school?.formMasterSigUrl,
+          principalSigUrl: school?.principalSigUrl,
+        },
+        groups,
+        { isThirdTerm, cumulative: isThirdTerm ? cumulativeForExport : undefined, sheetTitle: `${level} Combined` }
+      );
+      downloadWorkbook(buffer, `${level}_Combined_${term}_Term_Results.xlsx`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -322,54 +478,100 @@ export default function Results({ schoolId }) {
         </p>
       </div>
 
-      <div className="card-pad flex flex-col sm:flex-row sm:items-end gap-3">
-        <div className="flex-1">
-          <label className="field-label">Class</label>
-          <select className="input" value={classId} onChange={(e) => setClassId(e.target.value)}>
-            {classes.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex-1">
-          <label className="field-label">Term</label>
-          <select className="input" value={term} onChange={(e) => setTerm(e.target.value)}>
-            {TERMS.map((t) => (
-              <option key={t} value={t}>
-                {t} Term
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex-1">
-          <label className="field-label">Term ending</label>
-          <input
-            className="input"
-            placeholder="e.g. 12th December, 2025"
-            value={termDates.termEndingDate}
-            onChange={(e) => setTermDates((prev) => ({ ...prev, termEndingDate: e.target.value }))}
-            onBlur={(e) => saveTermDates({ termEndingDate: e.target.value })}
-          />
-        </div>
-        <div className="flex-1">
-          <label className="field-label">Next term begins</label>
-          <input
-            className="input"
-            placeholder="e.g. 5th January, 2026"
-            value={termDates.nextTermBegins}
-            onChange={(e) => setTermDates((prev) => ({ ...prev, nextTermBegins: e.target.value }))}
-            onBlur={(e) => saveTermDates({ nextTermBegins: e.target.value })}
-          />
-        </div>
-        <div className="flex gap-2">
-          <button className="btn-secondary" disabled={busy || !classId} onClick={recompute}>
-            Recompute positions
+      <div className="card-pad flex flex-col gap-3">
+        <div className="inline-flex rounded-lg border border-slate-200 p-0.5 self-start text-sm">
+          <button
+            className={`px-3 py-1.5 rounded-md font-medium ${scope === "class" ? "bg-slate-900 text-white" : "text-slate-500"}`}
+            onClick={() => setScope("class")}
+          >
+            Single class
           </button>
-          <button className="btn-primary" disabled={busy || !classId || students.length === 0} onClick={doExport}>
-            {busy ? "Working…" : "Export to Excel"}
+          <button
+            className={`px-3 py-1.5 rounded-md font-medium ${scope === "level" ? "bg-slate-900 text-white" : "text-slate-500"}`}
+            onClick={() => setScope("level")}
+          >
+            Whole level (combine streams)
           </button>
+        </div>
+
+        <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+          {scope === "class" ? (
+            <div className="flex-1">
+              <label className="field-label">Class</label>
+              <select className="input" value={classId} onChange={(e) => setClassId(e.target.value)}>
+                {classes.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex-1">
+              <label className="field-label">Level</label>
+              <select className="input" value={level} onChange={(e) => setLevel(e.target.value)}>
+                {levels.map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-400 mt-1">
+                Combines {levelClasses.map((c) => c.name).join(", ") || "no classes yet"} into one export, ranked
+                together by average — each student's own subjects still show as normal.
+              </p>
+            </div>
+          )}
+          <div className="flex-1">
+            <label className="field-label">Term</label>
+            <select className="input" value={term} onChange={(e) => setTerm(e.target.value)}>
+              {TERMS.map((t) => (
+                <option key={t} value={t}>
+                  {t} Term
+                </option>
+              ))}
+            </select>
+          </div>
+          {scope === "class" && (
+            <>
+              <div className="flex-1">
+                <label className="field-label">Term ending</label>
+                <input
+                  className="input"
+                  placeholder="e.g. 12th December, 2025"
+                  value={termDates.termEndingDate}
+                  onChange={(e) => setTermDates((prev) => ({ ...prev, termEndingDate: e.target.value }))}
+                  onBlur={(e) => saveTermDates({ termEndingDate: e.target.value })}
+                />
+              </div>
+              <div className="flex-1">
+                <label className="field-label">Next term begins</label>
+                <input
+                  className="input"
+                  placeholder="e.g. 5th January, 2026"
+                  value={termDates.nextTermBegins}
+                  onChange={(e) => setTermDates((prev) => ({ ...prev, nextTermBegins: e.target.value }))}
+                  onBlur={(e) => saveTermDates({ nextTermBegins: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+          <div className="flex gap-2">
+            {scope === "class" ? (
+              <>
+                <button className="btn-secondary" disabled={busy || !classId} onClick={recompute}>
+                  Recompute positions
+                </button>
+                <button className="btn-primary" disabled={busy || !classId || students.length === 0} onClick={doExport}>
+                  {busy ? "Working…" : "Export to Excel"}
+                </button>
+              </>
+            ) : (
+              <button className="btn-primary" disabled={busy || levelClasses.length === 0} onClick={doExportCombined}>
+                {busy ? "Working…" : `Export combined ${level || ""}`}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -398,9 +600,9 @@ export default function Results({ schoolId }) {
       </div>
 
       {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
-      {!classId && <p className="text-slate-400 text-sm">Create a class first.</p>}
+      {scope === "class" && !classId && <p className="text-slate-400 text-sm">Create a class first.</p>}
 
-      {classId && (
+      {scope === "class" && classId && (
         <>
           {/* Desktop / tablet table */}
           <div className="hidden sm:block table-wrap">

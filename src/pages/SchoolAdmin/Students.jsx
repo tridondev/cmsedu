@@ -6,6 +6,7 @@ export default function Students({ schoolId }) {
   const [classes, setClasses] = useState([]);
   const [classId, setClassId] = useState("");
   const [students, setStudents] = useState([]);
+  const [showGraduated, setShowGraduated] = useState(false);
   const [form, setForm] = useState({ fullName: "", examNo: "", sex: "MALE", stateOfOrigin: "", lga: "" });
   const [bulkText, setBulkText] = useState("");
   const [error, setError] = useState(null);
@@ -50,6 +51,8 @@ export default function Students({ schoolId }) {
     if (!confirm("Remove this student?")) return;
     await deleteDoc(doc(db, "schools", schoolId, "classes", classId, "students", studentId));
   };
+
+  const visibleStudents = showGraduated ? students : students.filter((s) => !s.graduated);
 
   const bulkAdd = async () => {
     setError(null);
@@ -155,7 +158,13 @@ export default function Students({ schoolId }) {
       {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
 
       <div>
-        <h3 className="page-title">Roster ({students.length})</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="page-title">Roster ({visibleStudents.length})</h3>
+          <label className="text-xs text-slate-500 inline-flex items-center gap-1.5">
+            <input type="checkbox" checked={showGraduated} onChange={(e) => setShowGraduated(e.target.checked)} />
+            Show graduated/promoted-out students
+          </label>
+        </div>
 
         <div className="hidden sm:block table-wrap mt-4">
           <table className="table-modern">
@@ -168,9 +177,11 @@ export default function Students({ schoolId }) {
               </tr>
             </thead>
             <tbody>
-              {students.map((s) => (
+              {visibleStudents.map((s) => (
                 <tr key={s.id}>
-                  <td className="font-medium text-slate-800">{s.fullName}</td>
+                  <td className="font-medium text-slate-800">
+                    {s.fullName} {s.graduated && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">Graduated</span>}
+                  </td>
                   <td className="text-slate-500">{s.examNo || "—"}</td>
                   <td className="text-slate-500">{s.sex}</td>
                   <td className="text-right">
@@ -180,7 +191,7 @@ export default function Students({ schoolId }) {
                   </td>
                 </tr>
               ))}
-              {students.length === 0 && (
+              {visibleStudents.length === 0 && (
                 <tr>
                   <td colSpan={4} className="p-6 text-center text-slate-400">
                     No students in this class yet.
@@ -192,10 +203,12 @@ export default function Students({ schoolId }) {
         </div>
 
         <div className="sm:hidden flex flex-col gap-2 mt-4">
-          {students.map((s) => (
+          {visibleStudents.map((s) => (
             <div key={s.id} className="row-card flex-row items-center justify-between">
               <div>
-                <p className="font-medium text-slate-800 text-sm">{s.fullName}</p>
+                <p className="font-medium text-slate-800 text-sm">
+                  {s.fullName} {s.graduated && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">Graduated</span>}
+                </p>
                 <p className="text-slate-400 text-xs mt-0.5">{s.examNo || "no exam no."} · {s.sex}</p>
               </div>
               <button className="btn-sm btn-danger" onClick={() => removeStudent(s.id)}>
@@ -203,7 +216,7 @@ export default function Students({ schoolId }) {
               </button>
             </div>
           ))}
-          {students.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class yet.</div>}
+          {visibleStudents.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class yet.</div>}
         </div>
       </div>
     </div>

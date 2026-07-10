@@ -846,6 +846,88 @@ export function downloadWorkbook(buffer, filename) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Same report card layout as exportClassResults, but for combining several
+ * streams of one level (e.g. SS1 Science + SS1 Art + SS1 Commercial) into a
+ * single downloaded workbook, with ONE shared position ranking across all of
+ * them — for schools that want a whole-level compilation rather than each
+ * stream ranked only against itself.
+ *
+ * Each group keeps its OWN subjects/className when its students' blocks are
+ * written (since streams take different subjects, comparing subject-by-
+ * subject across streams wouldn't make sense) — only the caller-supplied
+ * `overallPosition`/`overallAverage` on each student is expected to already
+ * reflect the combined, whole-level ranking (compute that with
+ * resultEngine's rankWithTies over every student's own average, pooled
+ * across all groups, before calling this).
+ *
+ * @param {Object} school   same shape as exportClassResults
+ * @param {Array}  groups   [{ classInfo, students }, ...] — one entry per
+ *                            stream, each classInfo carrying that stream's
+ *                            own subjects/className/stream label
+ * @param {Object} options  { isThirdTerm, cumulative, colors, sheetTitle }
+ *                            `cumulative` is keyed by studentId same as
+ *                            exportClassResults, pooled across all groups.
+ */
+export async function exportCombinedResults(school, groups, options = {}) {
+  applyColorTheme(options.colors);
+
+  const wb = new ExcelJS.Workbook();
+  const isThirdTerm = !!options.isThirdTerm;
+  const colCount = isThirdTerm ? 14 : 11;
+  const columnWidths = isThirdTerm ? COLUMN_WIDTHS_THIRD : COLUMN_WIDTHS_SINGLE;
+  const sheet = wb.addWorksheet(options.sheetTitle || groups[0]?.classInfo?.term || "Result");
+  for (let i = 1; i <= colCount; i++) sheet.getColumn(i).width = columnWidths[i - 1];
+
+  const [govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId] = await Promise.all([
+    registerImage(wb, school.govLogoUrl),
+    registerImage(wb, school.logoUrl),
+    registerImage(wb, school.formMasterSigUrl),
+    registerImage(wb, school.principalSigUrl),
+  ]);
+
+  const totalStudents = groups.reduce((n, g) => n + g.students.length, 0);
+  sheet.pageSetup = {
+    paperSize: 9,
+    orientation: isThirdTerm ? "landscape" : "portrait",
+    fitToPage: true,
+    fitToWidth: 1,
+    fitToHeight: totalStudents,
+    horizontalCentered: true,
+    margins: { left: 0.35, right: 0.35, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 },
+    printArea: `A1:${sheet.getColumn(colCount).letter}${BLOCK_HEIGHT * totalStudents}`,
+  };
+
+  const positionOf = (student) => {
+    const raw = student.overallPosition;
+    if (raw === null || raw === undefined) return Infinity;
+    const match = String(raw).match(/\d+/);
+    return match ? parseInt(match[0], 10) : Infinity;
+  };
+  // Flatten every group's students, tagging each with the classInfo (own
+  // subjects/className/stream) its block should be written with, then sort
+  // the WHOLE combined set by position so pages read 1st -> last regardless
+  // of which stream each student happens to be in.
+  const flattened = groups.flatMap((g) => g.students.map((s) => ({ ...s, __classInfo: g.classInfo })));
+  const ordered = [...flattened].sort((a, b) => positionOf(a) - positionOf(b));
+
+  let top = 1;
+  ordered.forEach((student, i) => {
+    const classInfo = student.__classInfo;
+    if (isThirdTerm) {
+      writeThirdTermBlock(sheet, top, school, classInfo, student, student.scores, options.cumulative?.[student.id], govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId);
+    } else {
+      writeSingleTermBlock(sheet, top, school, classInfo, student, student.scores, govLogoImageId, schoolLogoImageId, formMasterSigImageId, principalSigImageId);
+    }
+    if (i !== ordered.length - 1) {
+      sheet.getRow(top + BLOCK_HEIGHT - 1).addPageBreak();
+    }
+    top += BLOCK_HEIGHT;
+  });
+
+  return wb.xlsx.writeBuffer();
+}
+
 // ---------------------------------------------------------------------------
 // Provenance: the row/column map, the visual design (fonts, sizes, colors,
 // header fills), AND the row heights / column widths above were measured

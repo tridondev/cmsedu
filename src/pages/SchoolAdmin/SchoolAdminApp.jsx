@@ -9,6 +9,7 @@ import Students from "./Students";
 import Teachers from "./Teachers";
 import Results from "./Results";
 import Progress from "./Progress";
+import Promotion from "./Promotion";
 import Settings from "./Settings";
 
 const TABS = [
@@ -18,6 +19,7 @@ const TABS = [
   { to: "teachers", label: "Teachers" },
   { to: "progress", label: "Progress" },
   { to: "results", label: "Results & Export" },
+  { to: "promotion", label: "New Session" },
   { to: "settings", label: "Signatures/Settings" },
 ];
 
@@ -40,6 +42,7 @@ export default function SchoolAdminApp({ schoolId }) {
         <Route path="teachers" element={<Teachers schoolId={schoolId} />} />
         <Route path="progress" element={<Progress schoolId={schoolId} />} />
         <Route path="results" element={<Results schoolId={schoolId} />} />
+        <Route path="promotion" element={<Promotion schoolId={schoolId} />} />
         <Route path="settings" element={<Settings schoolId={schoolId} />} />
       </Routes>
     </AppShell>
