@@ -424,8 +424,17 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, totalRow, 2, Math.round(total * 100) / 100, { bold: true, size: 28 });
   merge(sheet, totalRow, 6, r(38), 7);
   cell(sheet, totalRow, 6, "AVERAGE:", { bold: true, align: "center", size: 28 });
-  cell(sheet, totalRow, 11, Math.round(average * 100) / 100, { bold: true, align: "center", size: 28 });
-  cell(sheet, r(38), 8, classInfo.subjects.length, { align: "center", bold: true, size: 28 });
+  // TOTAL (numerator) over subject COUNT (denominator), fraction-bar line
+  // between them, then "=" then the actual average — this must read as a
+  // real equation (total ÷ count = average), not average sitting over count.
+  cell(sheet, totalRow, 8, Math.round(total * 100) / 100, { bold: true, align: "center", size: 24 });
+  cell(sheet, r(38), 8, classInfo.subjects.length, { align: "center", bold: true, size: 24 });
+  sheet.getRow(totalRow).getCell(8).border = { bottom: { style: "medium" } };
+  sheet.getRow(r(38)).getCell(8).border = { top: { style: "medium" } };
+  merge(sheet, totalRow, 9, r(38), 9);
+  cell(sheet, totalRow, 9, "=", { align: "center", size: 28 });
+  merge(sheet, totalRow, 10, r(38), 11);
+  cell(sheet, totalRow, 10, Math.round(average * 100) / 100, { bold: true, align: "center", size: 28 });
 
   bandHeader(sheet, r(40), 4, r(40), 8, "Ratings", { size: 20, border: true });
   merge(sheet, r(41), 1, r(41), 3);
