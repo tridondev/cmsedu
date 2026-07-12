@@ -6,6 +6,8 @@ import {
   computeSubjectTotal,
   gradeFor,
   computeClassPositions,
+  computeSubjectClassAverages,
+  rankWithTies,
   gradingScaleFor,
   effectiveWeights,
   defaultComponentMax,
@@ -60,8 +62,10 @@ async function recomputePositions(schoolId, resultKey) {
       studentsScores[sId][subId] = d.data().total || 0;
       subjectIds.add(subId);
     });
-    const positions = computeClassPositions(studentsScores, [...subjectIds]);
-    tx.set(positionsRef, { positions, computedAt: Date.now() }, { merge: true });
+    const subjectIdList = [...subjectIds];
+    const positions = computeClassPositions(studentsScores, subjectIdList);
+    const subjectAverages = computeSubjectClassAverages(studentsScores, subjectIdList);
+    tx.set(positionsRef, { positions, subjectAverages, computedAt: Date.now() }, { merge: true });
   });
 }
 
@@ -105,12 +109,13 @@ export default function ScoreEntryGrid({ schoolId }) {
   const [rowStatus, setRowStatus] = useState({});
   const [loading, setLoading] = useState(true);
   const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
-  // Live class-average/position, per student — recomputed automatically
-  // (via recomputePositionsClientSide) after every score save across every
-  // subject for this class/term, so it updates on its own with no extra
-  // click. Until every subject has scores for a student it reflects the
-  // average/position of whatever's been entered so far.
-  const [classPositions, setClassPositions] = useState({});
+  // Live class-average/position for THIS subject, computed client-side from
+  // whatever's currently in `scores` — same approach as the combined
+  // multi-class entry screen. Updates instantly as the teacher types,
+  // instead of waiting on a save + the debounced Firestore recompute below
+  // (which also wouldn't reflect this subject at all until a save has
+  // happened at least once). Students with nothing entered yet are left
+  // out of the ranking/average rather than counted as a 0.
 
   const gradingScale = gradingScaleFor(classInfo?.level);
   const subject = classInfo?.subjects?.find((s) => s.id === subjectId);
@@ -173,17 +178,22 @@ export default function ScoreEntryGrid({ schoolId }) {
     if (classInfo !== null) setWeights(effectiveWeights(gradingScaleFor(classInfo?.level), schoolData?.weights));
   }, [classInfo, schoolData]);
 
-  // Live: class average + position per student, auto-refreshed the moment
-  // recomputePositionsClientSide writes a new snapshot (i.e. right after
-  // any teacher — for any subject — saves a score for this class/term).
-  useEffect(() => {
-    if (!resultKey) return;
-    const unsub = onSnapshot(
-      doc(db, "schools", schoolId, "results", resultKey, "meta", "positions"),
-      (snap) => setClassPositions(snap.exists() ? snap.data().positions || {} : {})
-    );
-    return unsub;
-  }, [schoolId, resultKey]);
+  const subjectStats = useMemo(() => {
+    const entries = students
+      .map((s) => {
+        const row = scores[s.id] || {};
+        const hasEntry = FIELDS.some((f) => row[f.key] != null && row[f.key] !== "");
+        if (!hasEntry) return null;
+        const total = computeSubjectTotal(row, gradingScale, undefined, weights);
+        return { studentId: s.id, score: total };
+      })
+      .filter(Boolean);
+    const positions = rankWithTies(entries);
+    const average = entries.length
+      ? Math.round((entries.reduce((sum, e) => sum + e.score, 0) / entries.length) * 100) / 100
+      : "";
+    return { positions, average };
+  }, [students, scores, gradingScale, weights]);
 
   // Preload any scores already entered this term for this subject. Keyed
   // only on resultKey/subjectId (i.e. the teacher actually switching term or
@@ -432,7 +442,7 @@ export default function ScoreEntryGrid({ schoolId }) {
               <th className="text-center">Total</th>
               <th className="text-center">
                 Class avg
-                <span className="block text-[10px] font-normal text-slate-400">all subjects</span>
+                <span className="block text-[10px] font-normal text-slate-400">{subject?.name || "this subject"}</span>
               </th>
               <th className="text-center">Position</th>
               <th></th>
@@ -443,7 +453,6 @@ export default function ScoreEntryGrid({ schoolId }) {
               const row = scores[s.id] || {};
               const total = computeSubjectTotal(row, gradingScale, undefined, weights);
               const status = rowStatus[s.id];
-              const pos = classPositions[s.id];
               return (
                 <tr key={s.id}>
                   <td className="font-medium text-slate-800">{s.fullName}</td>
@@ -467,8 +476,8 @@ export default function ScoreEntryGrid({ schoolId }) {
                     );
                   })}
                   <td className="text-center font-semibold text-slate-900">{total}</td>
-                  <td className="text-center text-slate-600">{pos?.overallAverage ?? "—"}</td>
-                  <td className="text-center text-slate-600">{pos?.overallPosition ?? "—"}</td>
+                  <td className="text-center text-slate-600">{subjectStats.average ?? "—"}</td>
+                  <td className="text-center text-slate-600">{subjectStats.positions[s.id] ?? "—"}</td>
                   <td className="text-center">
                     <StatusBadge status={status} onRetry={() => saveRow(s.id)} />
                   </td>
@@ -492,7 +501,6 @@ export default function ScoreEntryGrid({ schoolId }) {
           const row = scores[s.id] || {};
           const total = computeSubjectTotal(row, gradingScale, undefined, weights);
           const status = rowStatus[s.id];
-          const pos = classPositions[s.id];
           return (
             <div key={s.id} className="row-card">
               <div className="flex items-center justify-between mb-1">
@@ -500,9 +508,9 @@ export default function ScoreEntryGrid({ schoolId }) {
                 <span className="badge-brand">{total} pts</span>
               </div>
               <div className="text-[11px] text-slate-500">
-                Class avg: <span className="font-medium text-slate-700">{pos?.overallAverage ?? "—"}</span>
+                Class avg: <span className="font-medium text-slate-700">{subjectStats.average ?? "—"}</span>
                 {" · "}
-                Position: <span className="font-medium text-slate-700">{pos?.overallPosition ?? "—"}</span>
+                Position: <span className="font-medium text-slate-700">{subjectStats.positions[s.id] ?? "—"}</span>
               </div>
               <div className="grid grid-cols-3 gap-2 mt-2">
                 {FIELDS.map((f, fieldIdx) => {

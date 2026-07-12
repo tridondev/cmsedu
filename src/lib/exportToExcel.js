@@ -188,6 +188,33 @@ function bandHeader(sheet, r1, c1, r2, c2, value, opts = {}) {
   return cell(sheet, r1, c1, value, { fill: NAVY, color: WHITE, bold: true, align: "center", ...opts });
 }
 
+/**
+ * The subject table always reserves 19 row-slots (see ROW_HEIGHTS_SINGLE /
+ * ROW_HEIGHTS_THIRD), but a class rarely has 19 subjects. Previously only
+ * `classInfo.subjects.length` rows got any border/style, so any class with
+ * fewer subjects than that (senior classes especially, which tend to run a
+ * shorter subject list than junior ones) left a visible blank, borderless
+ * gap between the last real subject row and the TOTAL row. This stamps the
+ * same bordered, empty-valued cell style across every unused slot so the
+ * grid reads as one continuous table all the way down to TOTAL.
+ *
+ * `r` is the block's row-offset helper, `rowBase` is the block-relative
+ * offset of the first subject row (17 for single-term, 16 for third-term),
+ * `fromIndex` is how many subject rows were actually written, and
+ * `colCount` is the layout's total column count (11 or 14).
+ */
+const SUBJECT_TABLE_SLOTS = 19;
+function fillEmptySubjectRows(sheet, r, rowBase, fromIndex, colCount) {
+  for (let i = fromIndex; i < SUBJECT_TABLE_SLOTS; i++) {
+    const row = r(rowBase + i);
+    cell(sheet, row, 1, "", { bold: true, size: 22, color: NAVY, border: true });
+    for (let col = 2; col < colCount; col++) {
+      cell(sheet, row, col, "", { border: true, align: "center", size: 26, bold: true });
+    }
+    cell(sheet, row, colCount, "", { size: 26, bold: true, border: true });
+  }
+}
+
 // -------------------------------------------------------------------------
 // Logo & signature embedding
 // -------------------------------------------------------------------------
@@ -417,6 +444,7 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
     cell(sheet, row, 11, s.remark ?? "", { size: 26, bold: true, border: true });
     total += Number(s.total || 0);
   });
+  fillEmptySubjectRows(sheet, r, 17, classInfo.subjects.length, 11);
 
   const totalRow = r(37);
   const average = classInfo.subjects.length ? total / classInfo.subjects.length : 0;
@@ -617,6 +645,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
     total += Number(s.total || 0);
     annualTotalSum += annual;
   });
+  fillEmptySubjectRows(sheet, r, 16, classInfo.subjects.length, 14);
 
   const totalRow = r(36);
   const average = classInfo.subjects.length ? total / classInfo.subjects.length : 0;

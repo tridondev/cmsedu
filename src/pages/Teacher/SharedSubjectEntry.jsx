@@ -9,6 +9,8 @@ import {
   computeSubjectTotal,
   gradeFor,
   computeClassPositions,
+  computeSubjectClassAverages,
+  rankWithTies,
   gradingScaleFor,
   effectiveWeights,
   defaultComponentMax,
@@ -53,8 +55,10 @@ async function recomputePositions(schoolId, resultKey) {
       studentsScores[sId][subId] = d.data().total || 0;
       subjectIds.add(subId);
     });
-    const positions = computeClassPositions(studentsScores, [...subjectIds]);
-    tx.set(positionsRef, { positions, computedAt: Date.now() }, { merge: true });
+    const subjectIdList = [...subjectIds];
+    const positions = computeClassPositions(studentsScores, subjectIdList);
+    const subjectAverages = computeSubjectClassAverages(studentsScores, subjectIdList);
+    tx.set(positionsRef, { positions, subjectAverages, computedAt: Date.now() }, { merge: true });
   });
 }
 
@@ -129,11 +133,10 @@ export default function SharedSubjectEntry({
   const [loading, setLoading]         = useState(true);
   const [isOnline, setIsOnline]       = useState(navigator.onLine);
   const [activeGroup, setActiveGroup] = useState(null); // classId being highlighted/scrolled to
-  // Live class-average/position per class, keyed classId -> { studentId: {...} }.
-  // Refreshed automatically (no button) whenever recomputePositionsClientSide
-  // writes a new snapshot for that class/term — i.e. right after any score
-  // save, from this screen or ScoreEntryGrid.
-  const [positionsByClass, setPositionsByClass] = useState({});
+  // Combined position/average for this subject, computed ACROSS all the
+  // combined classes together (not per class) — see combinedSubjectStats
+  // below. This is what should show in the table, so streams don't each
+  // show their own separate "1st".
 
   const debounceTimers = useRef({});
   const inputRefs      = useRef({}); // `${classId}:${studentIdx}:${fieldIdx}` -> element
@@ -227,23 +230,35 @@ export default function SharedSubjectEntry({
     return () => { cancelled = true; };
   }, [schoolId, subjectId, classIds, term, session]);
 
-  // ── Live class average/position, per class ──────────────────────────────
-  useEffect(() => {
-    if (!term || !session || !classIds?.length) return;
-    const unsubs = classIds.map((cId) => {
-      const resultKey = resultKeyFor(session, term, cId);
-      return onSnapshot(
-        doc(db, "schools", schoolId, "results", resultKey, "meta", "positions"),
-        (snap) => {
-          setPositionsByClass((prev) => ({
-            ...prev,
-            [cId]: snap.exists() ? snap.data().positions || {} : {},
-          }));
-        }
-      );
+  // ── Combined position/average across ALL combined classes ───────────────
+  // Ranks every student from every stream together for this one subject
+  // (e.g. SS1 Science + Art + Commercial as a single group), so the table
+  // shows one continuous class rank instead of each stream separately
+  // producing its own "1st". Totals are computed the same way the visible
+  // "Total" column is (live, from each row's entered fields + that
+  // student's own class weights) so this updates instantly as the teacher
+  // types, instead of waiting on a save + Firestore round trip. Rows with
+  // nothing entered yet are excluded rather than counted as a 0.
+  const combinedSubjectStats = useMemo(() => {
+    const entries = [];
+    (classIds || []).forEach((cId) => {
+      const gradingScale = gradingScaleFor(classInfoMap[cId]?.level);
+      const weights = effectiveWeights(gradingScale, schoolData?.weights);
+      (studentsByClass[cId] || []).forEach((s) => {
+        const key = `${cId}:${s.id}`;
+        const row = scores[key] || {};
+        const hasEntry = FIELDS.some((f) => row[f.key] != null && row[f.key] !== "");
+        if (!hasEntry) return;
+        const total = computeSubjectTotal(row, gradingScale, undefined, weights);
+        entries.push({ studentId: key, score: total });
+      });
     });
-    return () => unsubs.forEach((u) => u());
-  }, [schoolId, classIds, term, session]);
+    const positions = rankWithTies(entries);
+    const average = entries.length
+      ? Math.round((entries.reduce((sum, e) => sum + e.score, 0) / entries.length) * 100) / 100
+      : "";
+    return { positions, average };
+  }, [classIds, classInfoMap, studentsByClass, scores, schoolData]);
 
   // ── Beforeunload guard ──────────────────────────────────────────────────
   useEffect(() => {
@@ -538,9 +553,12 @@ export default function SharedSubjectEntry({
                         <th className="text-center">Total</th>
                         <th className="text-center">
                           Class avg
-                          <span className="block text-[10px] font-normal text-slate-400">all subjects</span>
+                          <span className="block text-[10px] font-normal text-slate-400">combined, this subject</span>
                         </th>
-                        <th className="text-center">Position</th>
+                        <th className="text-center">
+                          Position
+                          <span className="block text-[10px] font-normal text-slate-400">combined</span>
+                        </th>
                         <th />
                       </tr>
                     </thead>
@@ -550,7 +568,7 @@ export default function SharedSubjectEntry({
                         const row  = scores[key] || {};
                         const total = computeSubjectTotal(row, gradingScale, undefined, weights);
                         const status = rowStatus[key];
-                        const pos = positionsByClass[cId]?.[s.id];
+                        const combinedPosition = combinedSubjectStats.positions[key];
                         return (
                           <tr key={s.id}>
                             <td className="font-medium text-slate-800">{s.fullName}</td>
@@ -584,8 +602,8 @@ export default function SharedSubjectEntry({
                               );
                             })}
                             <td className="text-center font-semibold text-slate-900">{total}</td>
-                            <td className="text-center text-slate-600">{pos?.overallAverage ?? "—"}</td>
-                            <td className="text-center text-slate-600">{pos?.overallPosition ?? "—"}</td>
+                            <td className="text-center text-slate-600">{combinedSubjectStats.average ?? "—"}</td>
+                            <td className="text-center text-slate-600">{combinedPosition ?? "—"}</td>
                             <td className="text-center">
                               <StatusBadge
                                 status={status}
@@ -606,7 +624,7 @@ export default function SharedSubjectEntry({
                     const row   = scores[key] || {};
                     const total = computeSubjectTotal(row, gradingScale, undefined, weights);
                     const status = rowStatus[key];
-                    const pos = positionsByClass[cId]?.[s.id];
+                    const combinedPosition = combinedSubjectStats.positions[key];
                     return (
                       <div key={s.id} className="row-card">
                         <div className="flex items-center justify-between mb-1">
@@ -614,9 +632,9 @@ export default function SharedSubjectEntry({
                           <span className="badge-brand">{total} pts</span>
                         </div>
                         <div className="text-[11px] text-slate-500">
-                          Class avg: <span className="font-medium text-slate-700">{pos?.overallAverage ?? "—"}</span>
+                          Class avg: <span className="font-medium text-slate-700">{combinedSubjectStats.average ?? "—"}</span>
                           {" · "}
-                          Position: <span className="font-medium text-slate-700">{pos?.overallPosition ?? "—"}</span>
+                          Position: <span className="font-medium text-slate-700">{combinedPosition ?? "—"}</span>
                         </div>
                         <div className="grid grid-cols-3 gap-2 mt-2">
                           {FIELDS.map((f, fieldIdx) => {
