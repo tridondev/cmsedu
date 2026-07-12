@@ -57,7 +57,7 @@ export function computeSubjectTotal(rawScores, gradingScale, componentMax, custo
   return Math.round(total * 100) / 100; // 2dp, matches template precision
 }
 
-function defaultComponentMax(gradingScale) {
+export function defaultComponentMax(gradingScale) {
   return gradingScale === "JSS"
     ? { ca1: 10, ca2: 10, test1: 20, test2: 20, exam: 40 }
     : { ca1: 5, ca2: 5, test1: 10, test2: 10, exam: 70 };
@@ -182,6 +182,19 @@ function ordinal(n) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+/**
+ * Formats a Date as "13th December, 2025" — the same style already used as
+ * the placeholder text for the report card's Signature date field. Defaults
+ * to today. Used to auto-fill (but not lock) that field.
+ */
+export function formatOrdinalDate(date = new Date()) {
+  const months = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  return `${ordinal(date.getDate())} ${months[date.getMonth()]}, ${date.getFullYear()}`;
 }
 
 /**
