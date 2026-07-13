@@ -290,18 +290,16 @@ function placeLogos(sheet, top, colCount, columnWidths, govLogoImageId, schoolLo
 
 /**
  * Drops a signature image into the narrow gap column that sits between a
- * "Signature/Date:" label and the remark/date text beside it — that gap
- * column is otherwise empty in both layouts, and spans the remark row
- * directly above the signature row too, so there's room for a normal
- * signature-scan aspect ratio without colliding with any text.
- * `anchorRow` should be the block-relative row number of the REMARK row
- * (the row directly above "Signature/Date:"), so the image spans both rows.
+ * "Signature/Date:" label and the date text beside it — that gap column is
+ * otherwise empty in both layouts. `anchorRow` should be the block-relative
+ * row number of the "Signature/Date:" row itself, so the image sits right
+ * next to that label instead of floating up over the remark row above it.
  */
 function placeSignature(sheet, anchorRow, gapCol, imageId) {
   if (imageId == null) return;
   sheet.addImage(imageId, {
-    tl: { col: gapCol - 1 + 0.08, row: anchorRow - 1 + 0.15 },
-    ext: { width: 130, height: 65 },
+    tl: { col: gapCol - 1 + 0.08, row: anchorRow - 1 + 0.08 },
+    ext: { width: 110, height: 50 },
   });
 }
 
@@ -490,7 +488,7 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 3, r(56), 8);
   cell(sheet, r(56), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
-  placeSignature(sheet, r(55), 2, formMasterSigImageId);
+  placeSignature(sheet, r(56), 2, formMasterSigImageId);
 
   cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(58), 3, r(58), 10);
@@ -498,7 +496,7 @@ function writeSingleTermBlock(sheet, top, school, classInfo, student, subjectSco
   cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 3, r(59), 8);
   cell(sheet, r(59), 3, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
-  placeSignature(sheet, r(58), 2, principalSigImageId);
+  placeSignature(sheet, r(59), 2, principalSigImageId);
 }
 
 // -------------------------------------------------------------------------
@@ -741,7 +739,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(56), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(56), 9, r(56), 11);
   cell(sheet, r(56), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
-  placeSignature(sheet, r(55), 3, formMasterSigImageId);
+  placeSignature(sheet, r(56), 3, formMasterSigImageId);
 
   merge(sheet, r(58), 1, r(58), 2);
   cell(sheet, r(58), 1, "Principal's Remark: ", { bold: true, size: 24, color: BLUE, wrap: false });
@@ -751,7 +749,7 @@ function writeThirdTermBlock(sheet, top, school, classInfo, student, subjectScor
   cell(sheet, r(59), 1, "Signature/Date: ", { bold: true, size: 24, color: BLUE, wrap: false });
   merge(sheet, r(59), 9, r(59), 11);
   cell(sheet, r(59), 9, student.signatureDate || "", { bold: true, size: 18, color: NAVY, align: "center", wrap: false });
-  placeSignature(sheet, r(58), 3, principalSigImageId);
+  placeSignature(sheet, r(59), 3, principalSigImageId);
 }
 
 // -------------------------------------------------------------------------

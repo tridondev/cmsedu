@@ -340,15 +340,30 @@ export default function Results({ schoolId }) {
       const groupData = await Promise.all(
         levelClasses.map(async (cls) => {
           const resultKey = resultKeyFor(school?.currentSession, term, cls.id);
-          const [studentsSnap, scoresByStudent, metaSnap, resultDocSnap, reportSnap] = await Promise.all([
+          const [studentsSnap, scoresByStudent, resultDocSnap, reportSnap] = await Promise.all([
             getDocs(query(collection(db, "schools", schoolId, "classes", cls.id, "students"), orderBy("fullName"))),
             fetchTermScores(schoolId, school?.currentSession, cls.id, term),
-            getDoc(doc(db, "schools", schoolId, "results", resultKey, "meta", "positions")),
             getDoc(doc(db, "schools", schoolId, "results", resultKey)),
             getDocs(collection(db, "schools", schoolId, "results", resultKey, "reportMeta")),
           ]);
           const clsStudents = studentsSnap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((s) => !s.graduated);
-          const clsPositions = metaSnap.exists() ? metaSnap.data().positions || {} : {};
+          // Computed straight from the scores just fetched above — NOT read
+          // from the class's stored meta/positions snapshot, which is only
+          // refreshed when a teacher saves a score (or an admin clicks
+          // "Recompute"). Relying on that snapshot here meant any class in
+          // the level that hadn't triggered a recent recompute — or never
+          // had one — silently dropped its students out of the combined
+          // ranking below, leaving their Position blank on the export.
+          // Computing it live guarantees every class's positions reflect
+          // its current scores at export time, with nothing to go stale.
+          const totalsForPositions = {};
+          Object.entries(scoresByStudent).forEach(([sid, subs]) => {
+            totalsForPositions[sid] = {};
+            Object.entries(subs).forEach(([subId, s]) => {
+              totalsForPositions[sid][subId] = s.total ?? 0;
+            });
+          });
+          const clsPositions = computeClassPositions(totalsForPositions, (cls.subjects || []).map((s) => s.id));
           const clsResultData = resultDocSnap.exists() ? resultDocSnap.data() : {};
           const clsReportMeta = {};
           reportSnap.forEach((d) => (clsReportMeta[d.id] = d.data()));
@@ -374,6 +389,27 @@ export default function Results({ schoolId }) {
       });
       const combinedPositions = rankWithTies(averagesForRanking);
 
+      // Pool every student's per-subject totals into one level-wide table too,
+      // so a subject taken across every stream (e.g. English, Mathematics,
+      // Civic Ed) is ranked against the WHOLE level rather than only within
+      // its own class. Stream-specific subjects (e.g. Physics, Accounting)
+      // still only have entries from the one class that teaches them, so
+      // ranking them against this pooled table naturally reproduces the
+      // same per-class result for those — this one table correctly covers
+      // both cases without needing to tell general and stream subjects apart.
+      const pooledTotals = {};
+      const pooledSubjectIds = new Set();
+      groupData.forEach((g) => {
+        Object.entries(g.scoresByStudent).forEach(([sid, subs]) => {
+          pooledTotals[sid] = pooledTotals[sid] || {};
+          Object.entries(subs).forEach(([subId, s]) => {
+            pooledTotals[sid][subId] = s.total ?? 0;
+          });
+        });
+        (g.cls.subjects || []).forEach((s) => pooledSubjectIds.add(s.id));
+      });
+      const pooledPositions = computeClassPositions(pooledTotals, [...pooledSubjectIds]);
+
       const groups = [];
       let cumulativeForExport = {};
 
@@ -394,11 +430,12 @@ export default function Results({ schoolId }) {
 
         const exportStudents = g.clsStudents.map((s) => {
           const pos = g.clsPositions[s.id] || {};
+          const pooledPos = pooledPositions[s.id] || {};
           const meta = g.clsReportMeta[s.id] || {};
           const scores = {};
           subjects.forEach((subj) => {
             const raw = g.scoresByStudent[s.id]?.[subj.id] || {};
-            scores[subj.id] = { ...raw, classAvg: g.clsAverages[subj.id] ?? "", position: pos.subjectPositions?.[subj.id] || "" };
+            scores[subj.id] = { ...raw, classAvg: g.clsAverages[subj.id] ?? "", position: pooledPos.subjectPositions?.[subj.id] || "" };
           });
           return {
             id: s.id,
