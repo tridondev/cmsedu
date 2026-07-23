@@ -5,6 +5,7 @@ import {
   query, orderBy, runTransaction, setDoc,
 } from "firebase/firestore";
 import { db } from "../../firebase/config";
+import { useTeacherLock } from "../../hooks/useTeacherLock";
 import {
   computeSubjectTotal,
   gradeFor,
@@ -122,6 +123,11 @@ export default function SharedSubjectEntry({
   onBack,
 }) {
   const navigate = useNavigate();
+  const locked = useTeacherLock(schoolId);
+  const lockedRef = useRef(false);
+  useEffect(() => {
+    lockedRef.current = locked;
+  }, [locked]);
 
   const [schoolData, setSchoolData]   = useState(null);
   const [term, setTerm]               = useState(null);
@@ -294,6 +300,7 @@ export default function SharedSubjectEntry({
   const saveRow = useCallback(
     async (classId, studentId) => {
       if (!term || !session) return;
+      if (lockedRef.current) return; // account locked by admin — no writes allowed
       const key = `${classId}:${studentId}`;
       setRowStatus((prev) => ({ ...prev, [key]: "saving" }));
 
@@ -329,6 +336,7 @@ export default function SharedSubjectEntry({
   };
 
   const updateField = (classId, studentId, field, value) => {
+    if (locked) return; // belt-and-braces: inputs are disabled, but guard the handler too
     const key = `${classId}:${studentId}`;
     setScores((prev) => ({
       ...prev,
@@ -473,6 +481,11 @@ export default function SharedSubjectEntry({
       </div>
 
       {/* ── Alerts ── */}
+      {locked && (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+          🔒 Your account is locked by the school admin. You can view scores already entered, but no changes can be saved until an admin unlocks your account.
+        </div>
+      )}
       {!isOnline && (
         <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           You're offline. Scores will save automatically once you're back online.
@@ -483,6 +496,7 @@ export default function SharedSubjectEntry({
           <span>{errorCount} row{errorCount !== 1 ? "s" : ""} couldn't save.</span>
           <button
             className="btn-sm btn-secondary"
+            disabled={locked}
             onClick={() => {
               Object.entries(rowStatus).forEach(([key, st]) => {
                 if (st === "error") {
@@ -584,6 +598,7 @@ export default function SharedSubjectEntry({
                                     type="number"
                                     min={0}
                                     max={componentMax[f.key]}
+                                    disabled={locked}
                                     className={`input w-16 py-1.5 text-center mx-auto ${
                                       overMax ? "border-red-400 text-red-600" : ""
                                     }`}
@@ -653,6 +668,7 @@ export default function SharedSubjectEntry({
                                   type="number"
                                   min={0}
                                   max={componentMax[f.key]}
+                                  disabled={locked}
                                   className={`input py-1.5 text-center mt-0.5 ${
                                     overMax ? "border-red-400 text-red-600" : ""
                                   }`}

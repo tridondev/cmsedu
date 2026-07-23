@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { collection, doc, getDocs, onSnapshot, runTransaction, setDoc } from "firebase/firestore";
 import { db } from "../../firebase/config";
+import { useTeacherLock } from "../../hooks/useTeacherLock";
 import {
   computeSubjectTotal,
   gradeFor,
@@ -99,6 +100,11 @@ const AUTOSAVE_DEBOUNCE_MS = 700;
 export default function ScoreEntryGrid({ schoolId }) {
   const { classId, subjectId } = useParams();
   const navigate = useNavigate();
+  const locked = useTeacherLock(schoolId);
+  const lockedRef = useRef(false);
+  useEffect(() => {
+    lockedRef.current = locked;
+  }, [locked]);
   const [students, setStudents] = useState([]);
   const [scores, setScores] = useState({});
   const [classInfo, setClassInfo] = useState(null);
@@ -259,6 +265,7 @@ export default function ScoreEntryGrid({ schoolId }) {
   const saveRow = useCallback(
     async (studentId) => {
       if (!resultKey) return;
+      if (lockedRef.current) return; // account locked by admin — no writes allowed
       setRowStatus((prev) => ({ ...prev, [studentId]: "saving" }));
       try {
         const raw = scoresRef.current[studentId] || {};
@@ -309,6 +316,7 @@ export default function ScoreEntryGrid({ schoolId }) {
   };
 
   const updateField = (studentId, field, value) => {
+    if (locked) return; // belt-and-braces: inputs are disabled, but guard the handler too
     setScores((prev) => ({
       ...prev,
       [studentId]: { ...prev[studentId], [field]: value === "" ? undefined : Number(value) },
@@ -411,6 +419,11 @@ export default function ScoreEntryGrid({ schoolId }) {
         </div>
       </div>
 
+      {locked && (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+          🔒 Your account is locked by the school admin. You can view scores already entered, but no changes can be saved until an admin unlocks your account.
+        </div>
+      )}
       {!isOnline && (
         <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">
           You're offline. Scores you enter will save automatically once your connection is back.
@@ -421,7 +434,7 @@ export default function ScoreEntryGrid({ schoolId }) {
           <span>
             {errorCount} row{errorCount === 1 ? "" : "s"} couldn't save — check your connection.
           </span>
-          <button className="btn-sm btn-secondary" onClick={retryAllErrors}>
+          <button className="btn-sm btn-secondary" onClick={retryAllErrors} disabled={locked}>
             Retry now
           </button>
         </div>
@@ -466,6 +479,7 @@ export default function ScoreEntryGrid({ schoolId }) {
                           type="number"
                           min={0}
                           max={componentMax[f.key]}
+                          disabled={locked}
                           className={`input w-16 py-1.5 text-center mx-auto ${overMax ? "border-red-400 text-red-600" : ""}`}
                           value={val ?? ""}
                           onChange={(e) => updateField(s.id, f.key, e.target.value)}
@@ -526,6 +540,7 @@ export default function ScoreEntryGrid({ schoolId }) {
                         type="number"
                         min={0}
                         max={componentMax[f.key]}
+                        disabled={locked}
                         className={`input py-1.5 text-center mt-0.5 ${overMax ? "border-red-400 text-red-600" : ""}`}
                         value={val ?? ""}
                         onChange={(e) => updateField(s.id, f.key, e.target.value)}

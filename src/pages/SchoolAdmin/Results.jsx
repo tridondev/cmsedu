@@ -50,6 +50,7 @@ export default function Results({ schoolId }) {
   const [positions, setPositions] = useState({});
   const [reportMeta, setReportMeta] = useState({}); // { [studentId]: { behaviour, formMasterRemark, principalRemark, signatureDate, promotionComment } }
   const [termDates, setTermDates] = useState({ termEndingDate: "", nextTermBegins: "" });
+  const [lockedSubjects, setLockedSubjects] = useState([]); // subjectIds locked for this class+term+session
   const [reportStudentId, setReportStudentId] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -96,6 +97,7 @@ export default function Results({ schoolId }) {
         termEndingDate: resultData.termEndingDate || "",
         nextTermBegins: resultData.nextTermBegins || "",
       });
+      setLockedSubjects(resultData.lockedSubjects || []);
 
       const reportSnap = await getDocs(collection(db, "schools", schoolId, "results", resultKey, "reportMeta"));
       const meta = {};
@@ -138,6 +140,33 @@ export default function Results({ schoolId }) {
     const next = { ...termDates, ...patch };
     setTermDates(next);
     await setDoc(doc(db, "schools", schoolId, "results", resultKeyFor(school?.currentSession, term, classId)), next, { merge: true });
+  };
+
+  /**
+   * Locks/unlocks a subject for the currently selected class+term+session.
+   * Locking does NOT remove the teacher's assignment (Teachers.jsx) — they
+   * stay assigned so they're ready for the next term — it only blocks
+   * further edits to scores already entered for THIS term. Enforcement of
+   * the block must also live in Firestore security rules (see note in
+   * Teachers.jsx / firestore.rules), since this flag alone only drives the
+   * UI here; a teacher writing directly to Firestore must be blocked
+   * server-side too.
+   */
+  const toggleSubjectLock = async (subjectId) => {
+    const next = lockedSubjects.includes(subjectId)
+      ? lockedSubjects.filter((id) => id !== subjectId)
+      : [...lockedSubjects, subjectId];
+    setLockedSubjects(next);
+    try {
+      await setDoc(
+        doc(db, "schools", schoolId, "results", resultKeyFor(school?.currentSession, term, classId)),
+        { lockedSubjects: next },
+        { merge: true }
+      );
+    } catch (err) {
+      setLockedSubjects(lockedSubjects); // revert on failure
+      setError(err.message);
+    }
   };
 
   const saveReportMeta = async (studentId, data) => {
@@ -639,6 +668,33 @@ export default function Results({ schoolId }) {
       {error && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
       {scope === "class" && !classId && <p className="text-slate-400 text-sm">Create a class first.</p>}
 
+      {scope === "class" && classId && subjects.length > 0 && (
+        <div className="card-pad">
+          <p className="field-label mb-2">Lock entries for {term} Term</p>
+          <p className="text-xs text-slate-400 mb-3">
+            Locking a subject stops the assigned teacher from editing this term's scores, without removing
+            their assignment — they'll still see it next term. Unlock to allow edits again.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {subjects.map((s) => {
+              const locked = lockedSubjects.includes(s.id);
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => toggleSubjectLock(s.id)}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                    locked ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {s.name} {locked ? "🔒 Locked" : "🔓 Open"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {scope === "class" && classId && (
         <>
           {/* Desktop / tablet table */}
@@ -650,6 +706,7 @@ export default function Results({ schoolId }) {
                   {subjects.map((s) => (
                     <th key={s.id} className="text-center">
                       {s.name}
+                      {lockedSubjects.includes(s.id) && <span title="Locked" className="ml-1">🔒</span>}
                     </th>
                   ))}
                   <th className="text-center">Total</th>

@@ -71,6 +71,23 @@ export default function Teachers({ schoolId }) {
     }
   };
 
+  const [lockingId, setLockingId] = useState(null);
+
+  const toggleLock = async (teacher) => {
+    const nextLocked = !teacher.locked;
+    if (!confirm(nextLocked ? `Lock ${teacher.name}? They won't be able to edit their assigned courses until unlocked.` : `Unlock ${teacher.name}? They'll regain edit access to their assigned courses.`)) {
+      return;
+    }
+    setLockingId(teacher.id);
+    try {
+      await updateDoc(doc(db, "schools", schoolId, "users", teacher.id), { locked: nextLocked });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setLockingId(null);
+    }
+  };
+
   const removeAssignment = async (teacher, classId, subjectId) => {
     if (!confirm("Remove this assignment? The teacher will no longer see this class/subject.")) return;
     const next = (teacher.assignedSubjects || []).filter((a) => !(a.classId === classId && a.subjectId === subjectId));
@@ -177,8 +194,17 @@ export default function Teachers({ schoolId }) {
             <div key={t.id} className="row-card">
               <div className="sm:flex sm:items-start sm:justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="font-semibold text-slate-900 text-sm">
+                  <p className="font-semibold text-slate-900 text-sm flex items-center gap-2 flex-wrap">
                     {t.name} <span className="text-slate-400 font-normal">· {t.email}</span>
+                    {t.locked ? (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-100">
+                        🔒 Locked
+                      </span>
+                    ) : (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                        Unlocked
+                      </span>
+                    )}
                   </p>
                   {(t.assignedSubjects || []).length === 0 ? (
                     <p className="text-slate-400 text-xs mt-1">No assignments</p>
@@ -190,26 +216,39 @@ export default function Teachers({ schoolId }) {
                         return (
                           <span key={`${a.classId}:${a.subjectId}`} className="badge-slate pr-1.5">
                             {cls?.name || a.classId} · {subj?.name || a.subjectId}
-                            <button
-                              type="button"
-                              title="Remove this assignment"
-                              className="h-4 w-4 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 flex items-center justify-center text-xs"
-                              onClick={() => removeAssignment(t, a.classId, a.subjectId)}
-                            >
-                              ×
-                            </button>
+                            {!t.locked && (
+                              <button
+                                type="button"
+                                title="Remove this assignment"
+                                className="h-4 w-4 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 flex items-center justify-center text-xs"
+                                onClick={() => removeAssignment(t, a.classId, a.subjectId)}
+                              >
+                                ×
+                              </button>
+                            )}
                           </span>
                         );
                       })}
                     </div>
                   )}
                 </div>
-                <button
-                  className="btn-sm btn-secondary shrink-0 mt-2 sm:mt-0"
-                  onClick={() => (managingId === t.id ? cancelManage() : startManage(t))}
-                >
-                  {managingId === t.id ? "Cancel" : "Reassign"}
-                </button>
+                <div className="flex gap-2 shrink-0 mt-2 sm:mt-0">
+                  <button
+                    className={`btn-sm ${t.locked ? "btn-primary" : "btn-secondary"}`}
+                    disabled={lockingId === t.id}
+                    onClick={() => toggleLock(t)}
+                  >
+                    {lockingId === t.id ? "…" : t.locked ? "Unlock" : "Lock"}
+                  </button>
+                  <button
+                    className="btn-sm btn-secondary"
+                    disabled={t.locked}
+                    title={t.locked ? "Unlock this teacher to change assignments" : ""}
+                    onClick={() => (managingId === t.id ? cancelManage() : startManage(t))}
+                  >
+                    {managingId === t.id ? "Cancel" : "Reassign"}
+                  </button>
+                </div>
               </div>
 
               {managingId === t.id && (

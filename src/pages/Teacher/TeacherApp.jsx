@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { collection, doc, onSnapshot } from "firebase/firestore";
 import { db } from "../../firebase/config";
 import { useAuth } from "../../context/AuthContext";
+import { useTeacherLock } from "../../hooks/useTeacherLock";
 import AppShell from "../../components/AppShell";
 import CircularProgress from "../../components/CircularProgress";
 import ScoreEntryGrid from "./ScoreEntryGrid";
@@ -32,6 +33,7 @@ function SearchIcon(props) {
 
 function TeacherHome({ schoolId }) {
   const { user } = useAuth();
+  const locked = useTeacherLock(schoolId);
   const [assignments, setAssignments] = useState([]);
   const [classes, setClasses] = useState({}); // classId -> class data
   const [term, setTerm] = useState("First");
@@ -262,6 +264,11 @@ function TeacherHome({ schoolId }) {
         <div className="card-pad text-center text-slate-400 text-sm">No subjects assigned yet — ask your school admin.</div>
       ) : (
         <>
+          {locked && (
+            <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              🔒 Your account is locked by the school admin. You can view your classes and scores, but can't make any changes until an admin unlocks your account.
+            </div>
+          )}
           {/* Search + class filter — up top, above everything else, so it's
               the first thing a teacher sees and always usable regardless of
               how many shared-subject banners are showing below it. */}
@@ -361,6 +368,11 @@ function TeacherHome({ schoolId }) {
                       <p className="font-semibold text-slate-900 text-sm">{cls?.name || a.classId}</p>
                       <p className="text-slate-500 text-xs mt-0.5">{subject?.name || a.subjectId}</p>
                       <p className="text-slate-400 text-[11px] mt-1">{done}/{total} students entered</p>
+                      {locked && (
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 uppercase tracking-wide mt-1.5">
+                          🔒 View only
+                        </span>
+                      )}
                       {/* Badge shown when this subject is part of a shared group */}
                       {group && (
                         <span className="inline-flex items-center gap-1 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-brand-100 text-brand-700 uppercase tracking-wide mt-1.5">

@@ -22,6 +22,15 @@ service cloud.firestore {
         && request.auth.token.role == 'teacher';
     }
 
+    // A teacher whose school admin has locked their account (see
+    // Teachers.jsx "Lock"/"Unlock") loses write access to scores below,
+    // even though isTeacher() alone would still pass. Reads are unaffected —
+    // a locked teacher can still view everything, just not save changes.
+    function isUnlockedTeacher(schoolId) {
+      return isTeacher(schoolId)
+        && get(/databases/$(database)/documents/schools/$(schoolId)/users/$(request.auth.uid)).data.locked != true;
+    }
+
     // ---- Platform level (Super Admin only) ----
     match /platformAdmins/{uid} {
       allow read: if request.auth != null && request.auth.uid == uid;
@@ -61,7 +70,8 @@ service cloud.firestore {
           allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
           // Teachers may only write while term is unlocked; enforced fully via Cloud Function
           // validating assignedSubjects, since rules can't cheaply cross-reference arrays here.
-          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          // Additionally blocked entirely while the admin has locked the teacher's account.
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isUnlockedTeacher(schoolId);
         }
 
         // SPARK-PLAN NOTE: normally only the recomputeClassPositions Cloud
@@ -72,7 +82,7 @@ service cloud.firestore {
         // Cloud Functions are deployed and the client-side call is removed.
         match /meta/{metaId} {
           allow read: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
-          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isTeacher(schoolId);
+          allow write: if isPlatformAdmin() || isSchoolAdmin(schoolId) || isUnlockedTeacher(schoolId);
         }
 
         // Behaviour ratings + Form Master's/Principal's remarks + signature
