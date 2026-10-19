@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, writeBatch } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, onSnapshot, orderBy, query, updateDoc, writeBatch } from "firebase/firestore";
 import { db } from "../../firebase/config";
 
 export default function Students({ schoolId }) {
@@ -15,6 +15,9 @@ export default function Students({ schoolId }) {
   const [moveTarget, setMoveTarget] = useState("");
   const [moving, setMoving] = useState(false);
   const [moveMsg, setMoveMsg] = useState(null);
+  const [editing, setEditing] = useState(null); // student being edited
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "schools", schoolId, "classes"), orderBy("name"));
@@ -56,6 +59,42 @@ export default function Students({ schoolId }) {
   const removeStudent = async (studentId) => {
     if (!confirm("Remove this student?")) return;
     await deleteDoc(doc(db, "schools", schoolId, "classes", classId, "students", studentId));
+  };
+
+  const startEdit = (s) => {
+    setEditError(null);
+    setEditing({
+      id: s.id,
+      fullName: s.fullName || "",
+      examNo: s.examNo || "",
+      sex: s.sex || "MALE",
+      stateOfOrigin: s.stateOfOrigin || "",
+      lga: s.lga || "",
+    });
+  };
+
+  const saveEdit = async (e) => {
+    e.preventDefault();
+    setEditError(null);
+    if (!editing.fullName.trim()) return setEditError("Name is required");
+    setEditSaving(true);
+    try {
+      // Only the details change; the document id stays the same so all
+      // existing scores and results remain linked to this student.
+      await updateDoc(doc(db, "schools", schoolId, "classes", classId, "students", editing.id), {
+        fullName: editing.fullName.trim(),
+        examNo: editing.examNo.trim(),
+        sex: editing.sex,
+        stateOfOrigin: editing.stateOfOrigin.trim(),
+        lga: editing.lga.trim(),
+        updatedAt: Date.now(),
+      });
+      setEditing(null);
+    } catch (err) {
+      setEditError(err.message);
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const visibleStudents = showGraduated ? students : students.filter((s) => !s.graduated);
@@ -274,7 +313,10 @@ export default function Students({ schoolId }) {
                   </td>
                   <td className="text-slate-500">{s.examNo || "—"}</td>
                   <td className="text-slate-500">{s.sex}</td>
-                  <td className="text-right">
+                  <td className="text-right whitespace-nowrap">
+                    <button className="btn-sm btn-secondary mr-2" onClick={() => startEdit(s)}>
+                      Edit
+                    </button>
                     <button className="btn-sm btn-danger" onClick={() => removeStudent(s.id)}>
                       Remove
                     </button>
@@ -302,14 +344,62 @@ export default function Students({ schoolId }) {
                 </p>
                 <p className="text-slate-400 text-xs mt-0.5">{s.examNo || "no exam no."} · {s.sex}</p>
               </div>
-              <button className="btn-sm btn-danger" onClick={() => removeStudent(s.id)}>
-                Remove
-              </button>
+              <div className="flex gap-2">
+                <button className="btn-sm btn-secondary" onClick={() => startEdit(s)}>
+                  Edit
+                </button>
+                <button className="btn-sm btn-danger" onClick={() => removeStudent(s.id)}>
+                  Remove
+                </button>
+              </div>
             </div>
           ))}
           {visibleStudents.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class yet.</div>}
         </div>
       </div>
+      {editing && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !editSaving && setEditing(null)}>
+          <form onSubmit={saveEdit} onClick={(e) => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-md p-5 flex flex-col gap-3">
+            <h3 className="page-title">Edit student</h3>
+            <div>
+              <label className="field-label">Full name</label>
+              <input className="input" value={editing.fullName} onChange={(e) => setEditing({ ...editing, fullName: e.target.value })} autoFocus />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="field-label">Exam No.</label>
+                <input className="input" value={editing.examNo} onChange={(e) => setEditing({ ...editing, examNo: e.target.value })} />
+              </div>
+              <div>
+                <label className="field-label">Sex</label>
+                <select className="input" value={editing.sex} onChange={(e) => setEditing({ ...editing, sex: e.target.value })}>
+                  <option value="MALE">Male</option>
+                  <option value="FEMALE">Female</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="field-label">State of Origin</label>
+                <input className="input" value={editing.stateOfOrigin} onChange={(e) => setEditing({ ...editing, stateOfOrigin: e.target.value })} />
+              </div>
+              <div>
+                <label className="field-label">LGA</label>
+                <input className="input" value={editing.lga} onChange={(e) => setEditing({ ...editing, lga: e.target.value })} />
+              </div>
+            </div>
+            {editError && <p className="text-red-600 text-sm bg-red-50 border border-red-100 rounded-lg px-3 py-2">{editError}</p>}
+            <div className="flex justify-end gap-2 mt-1">
+              <button type="button" className="btn-secondary" disabled={editSaving} onClick={() => setEditing(null)}>
+                Cancel
+              </button>
+              <button className="btn-primary" disabled={editSaving}>
+                {editSaving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
