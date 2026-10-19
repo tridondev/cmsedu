@@ -114,6 +114,7 @@ export default function ScoreEntryGrid({ schoolId }) {
   // Per-student save state: 'saved' | 'dirty' | 'saving' | 'error' | undefined (untouched, no data)
   const [rowStatus, setRowStatus] = useState({});
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
   // Live class-average/position for THIS subject, computed client-side from
   // whatever's currently in `scores` — same approach as the combined
@@ -329,16 +330,39 @@ export default function ScoreEntryGrid({ schoolId }) {
   // field in reading order — same field of the next student after the last
   // field of a row — so a teacher can fill the whole sheet without lifting
   // their hand to tap between cells.
+  // Search only changes what is SHOWN. Averages, positions, save state and
+  // the progress bar still use the full class list, so filtering never
+  // changes anybody's results. Each entry keeps its index in the full list.
+  const visibleStudents = useMemo(() => {
+    const q = search.trim().toLowerCase().replace(/\s+/g, " ");
+    const all = students.map((s, idx) => ({ s, idx }));
+    if (!q) return all;
+    return all.filter(({ s }) => {
+      const name = (s.fullName || "").toLowerCase().replace(/\s+/g, " ");
+      const examNo = String(s.examNo || "").toLowerCase();
+      return name.includes(q) || examNo.includes(q);
+    });
+  }, [students, search]);
+
+  // The desktop table and the phone cards are both on the page (one is
+  // hidden by CSS), so they register their inputs under separate prefixes
+  // and Enter jumps within whichever layout is actually showing.
+  const refPrefix = () => (typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches ? "d" : "m");
+
   const handleKeyDown = (e, studentIdx, fieldIdx) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
+    const prefix = refPrefix();
     let nextStudent = studentIdx;
     let nextField = fieldIdx + 1;
     if (nextField >= FIELDS.length) {
       nextField = 0;
-      nextStudent += 1;
+      // next student that is currently visible (skips ones hidden by search)
+      const pos = visibleStudents.findIndex((v) => v.idx === studentIdx);
+      const nextVisible = visibleStudents[pos + 1];
+      nextStudent = nextVisible ? nextVisible.idx : -1;
     }
-    const next = inputRefs.current[`${nextStudent}:${nextField}`];
+    const next = nextStudent >= 0 ? inputRefs.current[`${prefix}:${nextStudent}:${nextField}`] : null;
     if (next) next.focus();
     else e.target.blur(); // last field of last student — nothing further to jump to
   };
@@ -419,6 +443,40 @@ export default function ScoreEntryGrid({ schoolId }) {
         </div>
       </div>
 
+      {/* Find a student in this class */}
+      {students.length > 0 && (
+        <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 max-w-sm">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <input
+              className="input pl-9 pr-9"
+              type="search"
+              placeholder="Search student by name…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {search && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 h-5 w-5 rounded-full bg-slate-200 hover:bg-slate-300 text-slate-600 text-xs flex items-center justify-center"
+                onClick={() => setSearch("")}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {search.trim() && (
+            <span className="text-xs text-slate-500">
+              Showing {visibleStudents.length} of {students.length}
+            </span>
+          )}
+        </div>
+      )}
+
       {locked && (
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
           🔒 Your account is locked by the school admin. You can view scores already entered, but no changes can be saved until an admin unlocks your account.
@@ -462,7 +520,7 @@ export default function ScoreEntryGrid({ schoolId }) {
             </tr>
           </thead>
           <tbody>
-            {students.map((s, studentIdx) => {
+            {visibleStudents.map(({ s, idx: studentIdx }) => {
               const row = scores[s.id] || {};
               const total = computeSubjectTotal(row, gradingScale, undefined, weights);
               const status = rowStatus[s.id];
@@ -475,7 +533,7 @@ export default function ScoreEntryGrid({ schoolId }) {
                     return (
                       <td key={f.key} className="text-center">
                         <input
-                          ref={(el) => (inputRefs.current[`${studentIdx}:${fieldIdx}`] = el)}
+                          ref={(el) => (inputRefs.current[`d:${studentIdx}:${fieldIdx}`] = el)}
                           type="number"
                           min={0}
                           max={componentMax[f.key]}
@@ -505,13 +563,20 @@ export default function ScoreEntryGrid({ schoolId }) {
                 </td>
               </tr>
             )}
+            {students.length > 0 && visibleStudents.length === 0 && (
+              <tr>
+                <td colSpan={FIELDS.length + 5} className="p-6 text-center text-slate-400">
+                  No student matches “{search.trim()}”.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
       {/* Mobile: stacked cards */}
       <div className="sm:hidden flex flex-col gap-3">
-        {students.map((s, studentIdx) => {
+        {visibleStudents.map(({ s, idx: studentIdx }) => {
           const row = scores[s.id] || {};
           const total = computeSubjectTotal(row, gradingScale, undefined, weights);
           const status = rowStatus[s.id];
@@ -536,7 +601,7 @@ export default function ScoreEntryGrid({ schoolId }) {
                         {f.label} <span className="normal-case font-normal">/{componentMax[f.key]}</span>
                       </label>
                       <input
-                        ref={(el) => (inputRefs.current[`${studentIdx}:${fieldIdx}`] = el)}
+                        ref={(el) => (inputRefs.current[`m:${studentIdx}:${fieldIdx}`] = el)}
                         type="number"
                         min={0}
                         max={componentMax[f.key]}
@@ -557,6 +622,9 @@ export default function ScoreEntryGrid({ schoolId }) {
           );
         })}
         {students.length === 0 && <div className="card-pad text-center text-slate-400 text-sm">No students in this class yet.</div>}
+        {students.length > 0 && visibleStudents.length === 0 && (
+          <div className="card-pad text-center text-slate-400 text-sm">No student matches “{search.trim()}”.</div>
+        )}
       </div>
     </div>
   );
