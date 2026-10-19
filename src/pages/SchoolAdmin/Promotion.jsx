@@ -101,49 +101,52 @@ export default function Promotion({ schoolId }) {
     try {
       await saveMapping(); // persist the mapping for next year too
 
-      const summary = [];
+      // STEP 1 — read every roster BEFORE writing anything.
+      // (Previously each class was read and moved one after another, so
+      // JSS1 -> JSS2 ran first and then JSS2 was read again, now including
+      // the students who had just arrived from JSS1, and moved them on to
+      // JSS3 as well. Taking one snapshot up front stops that cascade.)
+      const snapshots = [];
       for (const c of classes) {
         const target = mapping[c.id];
         if (!target) continue; // NONE — leave this class untouched
-
         const studentsSnap = await getDocs(collection(db, "schools", schoolId, "classes", c.id, "students"));
         const activeStudents = studentsSnap.docs.filter((d) => !d.data().graduated);
         if (activeStudents.length === 0) continue;
+        snapshots.push({ cls: c, target, students: activeStudents.map((d) => ({ id: d.id, data: d.data() })) });
+      }
 
-        let batch = writeBatch(db);
-        let opsInBatch = 0;
-        let count = 0;
-
-        for (const studentDoc of activeStudents) {
-          const data = studentDoc.data();
+      // STEP 2 — apply the moves using only the snapshot taken above.
+      const summary = [];
+      let batch = writeBatch(db);
+      let opsInBatch = 0;
+      for (const { cls: c, target, students } of snapshots) {
+        for (const s of students) {
           if (target === GRADUATE) {
-            batch.set(doc(db, "schools", schoolId, "classes", c.id, "students", studentDoc.id), { graduated: true, graduatedAt: Date.now() }, { merge: true });
+            batch.set(doc(db, "schools", schoolId, "classes", c.id, "students", s.id), { graduated: true, graduatedAt: Date.now() }, { merge: true });
             opsInBatch++;
           } else {
             // Same document id at the new class, so historical results
             // (keyed by student id) stay linked to the same student.
-            batch.set(doc(db, "schools", schoolId, "classes", target, "students", studentDoc.id), {
-              ...data,
+            batch.set(doc(db, "schools", schoolId, "classes", target, "students", s.id), {
+              ...s.data,
               graduated: false,
               promotedFrom: c.id,
               promotedAt: Date.now(),
             });
-            batch.delete(doc(db, "schools", schoolId, "classes", c.id, "students", studentDoc.id));
+            batch.delete(doc(db, "schools", schoolId, "classes", c.id, "students", s.id));
             opsInBatch += 2;
           }
-          count++;
-
           if (opsInBatch >= 400) {
             await batch.commit();
             batch = writeBatch(db);
             opsInBatch = 0;
           }
         }
-        if (opsInBatch > 0) await batch.commit();
-
         const targetName = target === GRADUATE ? "Graduated" : classes.find((k) => k.id === target)?.name || target;
-        summary.push({ from: c.name, to: targetName, count });
+        summary.push({ from: c.name, to: targetName, count: students.length });
       }
+      if (opsInBatch > 0) await batch.commit();
 
       if (newSession.trim()) {
         await updateDoc(doc(db, "schools", schoolId), { currentSession: newSession.trim(), currentTerm: "First" });

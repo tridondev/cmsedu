@@ -11,6 +11,10 @@ export default function Students({ schoolId }) {
   const [bulkText, setBulkText] = useState("");
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState({}); // studentId -> true
+  const [moveTarget, setMoveTarget] = useState("");
+  const [moving, setMoving] = useState(false);
+  const [moveMsg, setMoveMsg] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "schools", schoolId, "classes"), orderBy("name"));
@@ -22,6 +26,8 @@ export default function Students({ schoolId }) {
   }, [schoolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    setSelected({});
+    setMoveMsg(null);
     if (!classId) return setStudents([]);
     const q = query(collection(db, "schools", schoolId, "classes", classId, "students"), orderBy("fullName"));
     return onSnapshot(q, (snap) => setStudents(snap.docs.map((d) => ({ id: d.id, ...d.data() }))));
@@ -53,6 +59,68 @@ export default function Students({ schoolId }) {
   };
 
   const visibleStudents = showGraduated ? students : students.filter((s) => !s.graduated);
+
+  const selectedIds = visibleStudents.filter((s) => selected[s.id]).map((s) => s.id);
+  const allSelected = visibleStudents.length > 0 && selectedIds.length === visibleStudents.length;
+  const toggleOne = (id) => setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggleAll = () => {
+    if (allSelected) return setSelected({});
+    const next = {};
+    visibleStudents.forEach((s) => (next[s.id] = true));
+    setSelected(next);
+  };
+
+  // Move the ticked students to another class. Same document id is kept so
+  // their existing results stay linked to them.
+  const moveSelected = async () => {
+    setError(null);
+    setMoveMsg(null);
+    if (!moveTarget) return setError("Choose the class to move them to");
+    if (!selectedIds.length) return;
+    const sameClass = moveTarget === classId;
+    if (sameClass && selectedIds.some((id) => !students.find((x) => x.id === id)?.graduated)) {
+      return setError("Those students are already active in this class. Pick a different class, or select only graduated students to restore them here.");
+    }
+    const targetName = classes.find((c) => c.id === moveTarget)?.name || "that class";
+    const verb = sameClass ? "Restore" : "Move";
+    if (!confirm(`${verb} ${selectedIds.length} student${selectedIds.length === 1 ? "" : "s"} ${sameClass ? "as active in" : "to"} ${targetName}?`)) return;
+    setMoving(true);
+    try {
+      let batch = writeBatch(db);
+      let ops = 0;
+      for (const id of selectedIds) {
+        const s = students.find((x) => x.id === id);
+        if (!s) continue;
+        const { id: _omit, ...data } = s;
+        if (sameClass) {
+          // Wrongly graduated: just make them active again in the same class.
+          batch.set(doc(db, "schools", schoolId, "classes", classId, "students", id), { graduated: false, graduatedAt: null }, { merge: true });
+          ops += 1;
+        } else {
+          batch.set(doc(db, "schools", schoolId, "classes", moveTarget, "students", id), {
+            ...data,
+            graduated: false,
+            promotedFrom: classId,
+            promotedAt: Date.now(),
+          });
+          batch.delete(doc(db, "schools", schoolId, "classes", classId, "students", id));
+          ops += 2;
+        }
+        if (ops >= 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          ops = 0;
+        }
+      }
+      if (ops > 0) await batch.commit();
+      setSelected({});
+      setMoveMsg(`${sameClass ? "Restored" : "Moved"} ${selectedIds.length} student${selectedIds.length === 1 ? "" : "s"} ${sameClass ? "in" : "to"} ${targetName}.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setMoving(false);
+    }
+  };
 
   const bulkAdd = async () => {
     setError(null);
@@ -166,10 +234,31 @@ export default function Students({ schoolId }) {
           </label>
         </div>
 
+
+        {visibleStudents.length > 0 && (
+          <div className="card-pad mt-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            <label className="text-sm text-slate-600 inline-flex items-center gap-2">
+              <input type="checkbox" checked={allSelected} onChange={toggleAll} />
+              Select all ({selectedIds.length} selected)
+            </label>
+            <select className="input sm:max-w-xs sm:ml-auto" value={moveTarget} onChange={(e) => setMoveTarget(e.target.value)}>
+              <option value="">Move selected to…</option>
+              {classes.map((c) => (
+                <option key={c.id} value={c.id}>{c.id === classId ? `${c.name} (restore graduated here)` : c.name}</option>
+              ))}
+            </select>
+            <button className="btn-primary" disabled={moving || !selectedIds.length || !moveTarget} onClick={moveSelected}>
+              {moving ? "Moving…" : "Move"}
+            </button>
+          </div>
+        )}
+        {moveMsg && <p className="text-emerald-700 text-sm bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2 mt-3">{moveMsg}</p>}
+
         <div className="hidden sm:block table-wrap mt-4">
           <table className="table-modern">
             <thead>
               <tr>
+                <th className="w-8"></th>
                 <th>Name</th>
                 <th>Exam No.</th>
                 <th>Sex</th>
@@ -179,6 +268,7 @@ export default function Students({ schoolId }) {
             <tbody>
               {visibleStudents.map((s) => (
                 <tr key={s.id}>
+                  <td><input type="checkbox" checked={!!selected[s.id]} onChange={() => toggleOne(s.id)} /></td>
                   <td className="font-medium text-slate-800">
                     {s.fullName} {s.graduated && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">Graduated</span>}
                   </td>
@@ -193,7 +283,7 @@ export default function Students({ schoolId }) {
               ))}
               {visibleStudents.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="p-6 text-center text-slate-400">
+                  <td colSpan={5} className="p-6 text-center text-slate-400">
                     No students in this class yet.
                   </td>
                 </tr>
@@ -205,7 +295,8 @@ export default function Students({ schoolId }) {
         <div className="sm:hidden flex flex-col gap-2 mt-4">
           {visibleStudents.map((s) => (
             <div key={s.id} className="row-card flex-row items-center justify-between">
-              <div>
+              <input type="checkbox" className="mr-3" checked={!!selected[s.id]} onChange={() => toggleOne(s.id)} />
+              <div className="flex-1">
                 <p className="font-medium text-slate-800 text-sm">
                   {s.fullName} {s.graduated && <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 align-middle">Graduated</span>}
                 </p>
